@@ -1,0 +1,53 @@
+
+# CodeGraphMcp local index
+.agent-index/
+
+# Build results & output
+[Bb]in/
+[Oo]bj/
+[Pp]ublish/
+[Oo]ut/
+[Lld]og/
+[Lld]ogs/
+
+# Visual Studio & IDEs
+.vs/
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.user
+*.userosscache
+*.sln.docstates
+*.suo
+*.userprefs
+
+# Test & Code Coverage
+[Tt]est[Rr]esults/
+*.coverage
+*.coveragexml
+
+# NuGet
+*.nupkg
+*.snupkg
+**/packages/
+project.lock.json
+project.assets.json
+
+# Operating System & Temp files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+*.tmp
+*.log
+
+
+# CodeGraphMcp local index & settings
+.codegraph/
+outputs
+
+# CodeAtlas local index & settings
+.codeatlas/
