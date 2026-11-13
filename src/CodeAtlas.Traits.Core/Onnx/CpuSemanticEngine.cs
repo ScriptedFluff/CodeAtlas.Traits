@@ -237,7 +237,8 @@ public sealed class CpuSemanticEngine : IDisposable
             {
                 GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
                 ExecutionMode          = ExecutionMode.ORT_SEQUENTIAL,
-                IntraOpNumThreads      = Math.Clamp(Environment.ProcessorCount / 2, 1, 4)
+                IntraOpNumThreads      = 1,
+                InterOpNumThreads      = 1
             };
 
             var session   = new InferenceSession(modelPath, options);
@@ -269,7 +270,7 @@ public sealed class CpuSemanticEngine : IDisposable
     {
         try
         {
-            var (inputIds, attentionMask, tokenTypeIds) = _tokeniser!.Encode(text, maxTokens: 128);
+            var (inputIds, attentionMask, tokenTypeIds) = _tokeniser!.Encode(text, maxTokens: 48);
             var seqLen = inputIds.Length;
             var shape  = new[] { 1, seqLen };
 

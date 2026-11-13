@@ -160,27 +160,30 @@ public static class CommandFactory
         Option<DirectoryInfo?> dbDirOpt;
         Option<string?> langOpt;
         Option<int> limitOpt;
+        Option<bool> includeAutoOpt;
         Option<bool> jsonOpt;
         Command cmd;
 
         // ── 2. Intent-First Narrative ──
-        repoOpt  = new Option<DirectoryInfo?>(new[] { "--repo", "-r" }, "Repository path");
-        dbDirOpt = new Option<DirectoryInfo?>("--db-dir", "Override directory for SQLite databases");
-        langOpt  = new Option<string?>(new[] { "--language", "--lang" }, "Filter by language");
-        limitOpt = new Option<int>(new[] { "--limit", "-l" }, () => 25, "Batch size");
-        jsonOpt  = new Option<bool>("--json", "Output candidates as JSON");
+        repoOpt        = new Option<DirectoryInfo?>(new[] { "--repo", "-r" }, "Repository path");
+        dbDirOpt       = new Option<DirectoryInfo?>("--db-dir", "Override directory for SQLite databases");
+        langOpt        = new Option<string?>(new[] { "--language", "--lang" }, "Filter by language");
+        limitOpt       = new Option<int>(new[] { "--limit", "-l" }, () => 25, "Batch size");
+        includeAutoOpt = new Option<bool>(new[] { "--include-auto", "-a" }, () => true, "Include baseline 'auto-cpu' tagged symbols awaiting detailed AI enrichment");
+        jsonOpt        = new Option<bool>("--json", "Output candidates as JSON");
 
-        cmd = new Command("untagged", "List untagged non-trivial symbols awaiting capability tagging");
+        cmd = new Command("untagged", "List untagged or baseline auto-cpu tagged non-trivial symbols awaiting detailed AI capability tagging");
         cmd.AddOption(repoOpt);
         cmd.AddOption(dbDirOpt);
         cmd.AddOption(langOpt);
         cmd.AddOption(limitOpt);
+        cmd.AddOption(includeAutoOpt);
         cmd.AddOption(jsonOpt);
 
-        cmd.SetHandler(async (repo, dbDir, lang, limit, json) =>
+        cmd.SetHandler(async (repo, dbDir, lang, limit, includeAuto, json) =>
         {
-            await ExecuteUntaggedCommandAsync(repo?.FullName ?? Environment.CurrentDirectory, dbDir?.FullName, lang, limit, json);
-        }, repoOpt, dbDirOpt, langOpt, limitOpt, jsonOpt);
+            await ExecuteUntaggedCommandAsync(repo?.FullName ?? Environment.CurrentDirectory, dbDir?.FullName, lang, limit, includeAuto, json);
+        }, repoOpt, dbDirOpt, langOpt, limitOpt, includeAutoOpt, jsonOpt);
 
         // ── 3. Output / Return ──
         return cmd;
@@ -441,6 +444,7 @@ public static class CommandFactory
         string? customDbDir,
         string? language,
         int limit,
+        bool includeAuto,
         bool isJson)
     {
         // ── 1. Declarations ──
@@ -455,7 +459,7 @@ public static class CommandFactory
 
         using var db = new TraitsDb(workspace.TraitsDbPath);
         db.Migrate();
-        candidates = db.Traits.GetUntaggedBatch(language, limit);
+        candidates = db.Traits.GetUntaggedBatch(language, limit, includeAutoTagged: includeAuto);
 
         // ── 3. Output / Return ──
         if (isJson)
@@ -466,7 +470,8 @@ public static class CommandFactory
 
         foreach (var c in candidates)
         {
-            Console.WriteLine($"[{c.BodyHash}] [{c.SymbolType}] {c.SymbolName} ({c.Language}) | {c.FilePath}:{c.StartLine}-{c.EndLine}");
+            var srcBadge = string.IsNullOrWhiteSpace(c.CurrentTagSource) ? "untagged" : c.CurrentTagSource;
+            Console.WriteLine($"[{c.BodyHash}] ({srcBadge}) [{c.SymbolType}] {c.SymbolName} ({c.Language}) | {c.FilePath}:{c.StartLine}-{c.EndLine}");
         }
     }
 

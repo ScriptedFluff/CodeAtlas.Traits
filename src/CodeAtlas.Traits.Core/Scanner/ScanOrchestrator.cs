@@ -61,6 +61,13 @@ public sealed class ScanOrchestrator
             return session.GetSnapshot();
         }
 
+        if (!forceRescan &&
+            File.Exists(workspace.TraitsDbPath) &&
+            TryReuseExistingDiskSnapshots(workspace, normalisedLanguage, session))
+        {
+            return session.GetSnapshot();
+        }
+
         // ── 3. Intent-First Narrative ──
         activeTask = session.GetOrStartScanTask(() => ExecuteFullScanAsync(
             workspace,
@@ -113,6 +120,59 @@ public sealed class ScanOrchestrator
         return _sessions.TryGetValue(workspaceRoot, out var fullSession) && fullSession.HasCompletedInitialScan;
     }
 
+    private static bool TryReuseExistingDiskSnapshots(
+        WorkspaceInfo workspace,
+        string? normalisedLanguage,
+        WorkspaceScanSession session)
+    {
+        // ── 1. Declarations ──
+        Stopwatch stopwatch;
+        int totalSnapshots;
+        int trackableSnapshots;
+        int untaggedSnapshots;
+        int autoTaggedCount;
+
+        // ── 2. Intent-First Narrative ──
+        try
+        {
+            stopwatch = Stopwatch.StartNew();
+            using var db = new TraitsDb(workspace.TraitsDbPath);
+            db.Migrate();
+
+            (totalSnapshots, trackableSnapshots, untaggedSnapshots) = db.Traits.GetQuickSnapshotCounts(normalisedLanguage);
+            if (totalSnapshots <= 0)
+            {
+                return false;
+            }
+
+            autoTaggedCount = 0;
+            if (untaggedSnapshots > 0)
+            {
+                autoTaggedCount = db.Traits.AutoTagAllUntaggedSymbols(
+                    workspace.WorkspaceRoot,
+                    normalisedLanguage,
+                    (processed, total) => session.UpdateProgress(
+                        ScanState.ScanningInProgress,
+                        $"Auto-tagging untagged symbols with CPU ONNX engine ({processed}/{total} unique bodies)...",
+                        processed,
+                        total,
+                        stopwatch.ElapsedMilliseconds));
+            }
+
+            stopwatch.Stop();
+            session.MarkCompletedFromExistingDb(
+                totalSnapshots,
+                trackableSnapshots,
+                autoTaggedCount,
+                stopwatch.ElapsedMilliseconds);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private async Task<ScanProgressSnapshot> ExecuteFullScanAsync(
         WorkspaceInfo workspace,
         string? normalisedLanguage,
@@ -124,6 +184,7 @@ public sealed class ScanOrchestrator
         Stopwatch stopwatch;
         IReadOnlyList<AtlasSymbolDto> atlasSymbols;
         List<SymbolSnapshot> computedSnapshots;
+        int autoTaggedCount;
 
         // ── 2. Intent-First Narrative ──
         stopwatch = Stopwatch.StartNew();
@@ -146,10 +207,16 @@ public sealed class ScanOrchestrator
 
             computedSnapshots = ComputeAllFileSnapshots(workspace.WorkspaceRoot, atlasSymbols, session, stopwatch);
 
-            PersistSnapshotsToDatabase(workspace.TraitsDbPath, computedSnapshots, normalisedLanguage);
+            autoTaggedCount = PersistSnapshotsAndAutoTagDatabase(
+                workspace.WorkspaceRoot,
+                workspace.TraitsDbPath,
+                computedSnapshots,
+                normalisedLanguage,
+                session,
+                stopwatch);
 
             stopwatch.Stop();
-            session.MarkCompleted(computedSnapshots.Count, atlasSymbols.Count, stopwatch.ElapsedMilliseconds);
+            session.MarkCompleted(computedSnapshots.Count, atlasSymbols.Count, autoTaggedCount, stopwatch.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {
@@ -196,14 +263,27 @@ public sealed class ScanOrchestrator
         return allSnapshots;
     }
 
-    private static void PersistSnapshotsToDatabase(
+    private static int PersistSnapshotsAndAutoTagDatabase(
+        string workspaceRoot,
         string traitsDbPath,
         IReadOnlyList<SymbolSnapshot> snapshots,
-        string? scopedLanguage)
+        string? scopedLanguage,
+        WorkspaceScanSession session,
+        Stopwatch stopwatch)
     {
         using var db = new TraitsDb(traitsDbPath);
         db.Migrate();
         db.Traits.ReplaceSymbolSnapshots(snapshots, scopedLanguage);
+
+        return db.Traits.AutoTagAllUntaggedSymbols(
+            workspaceRoot,
+            scopedLanguage,
+            (processed, total) => session.UpdateProgress(
+                ScanState.ScanningInProgress,
+                $"Auto-tagging untagged symbols with CPU ONNX engine ({processed}/{total} unique bodies)...",
+                processed,
+                total,
+                stopwatch.ElapsedMilliseconds));
     }
 
     private static async Task<bool> WaitWithTimeoutAsync(
@@ -272,14 +352,30 @@ public sealed class ScanOrchestrator
             }
         }
 
-        public void MarkCompleted(int snapshotsStored, int totalDiscovered, long elapsedMs)
+        public void MarkCompleted(int snapshotsStored, int totalDiscovered, int autoTaggedBodies, long elapsedMs)
         {
             lock (_gate)
             {
                 _state                   = ScanState.Ready;
-                _stageDescription        = $"Scan complete ({snapshotsStored} trackable symbols hashed in {elapsedMs}ms).";
+                _stageDescription        = $"Scan complete ({snapshotsStored} symbols hashed, {autoTaggedBodies} unique bodies auto-tagged in {elapsedMs}ms).";
                 _symbolsProcessed        = snapshotsStored;
                 _totalSymbols            = totalDiscovered;
+                _elapsedMs               = elapsedMs;
+                _errorMessage            = null;
+                _hasCompletedInitialScan = true;
+            }
+        }
+
+        public void MarkCompletedFromExistingDb(int snapshotsStored, int trackableSnapshots, int autoTaggedBodies, long elapsedMs)
+        {
+            lock (_gate)
+            {
+                _state            = ScanState.Ready;
+                _stageDescription = autoTaggedBodies > 0
+                    ? $"Ready ({snapshotsStored} symbols cached in traits.db; auto-tagged {autoTaggedBodies} untagged unique bodies in {elapsedMs}ms)."
+                    : $"Ready ({snapshotsStored} symbols cached in traits.db, {trackableSnapshots} non-trivial trackable; verified in {elapsedMs}ms).";
+                _symbolsProcessed        = snapshotsStored;
+                _totalSymbols            = snapshotsStored;
                 _elapsedMs               = elapsedMs;
                 _errorMessage            = null;
                 _hasCompletedInitialScan = true;

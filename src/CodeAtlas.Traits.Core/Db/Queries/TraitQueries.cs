@@ -332,6 +332,106 @@ public sealed class TraitQueries(SqliteConnection connection)
     }
 
     /// <summary>
+    /// Automatically generates baseline <c>'auto-cpu'</c> capability/technology tags and CPU ONNX embeddings
+    /// across all CPU cores for any untagged non-trivial symbols in <c>traits.db</c>.
+    /// </summary>
+    public int AutoTagAllUntaggedSymbols(
+        string? workspaceRoot = null,
+        string? language = null,
+        Action<int, int>? onProgress = null)
+    {
+        // ── 1. Declarations ──
+        string? normalisedLanguage;
+        List<SymbolSnapshot> untaggedSnapshots;
+        ThesaurusEngine thesaurus;
+        CpuSemanticEngine semanticEngine;
+        HashSet<string> existingVocab;
+        TraitEntry[] generatedEntries;
+        int totalToTag;
+        int completedCount;
+
+        // ── 2. Preconditions & Guard Clauses ──
+        normalisedLanguage = LanguageNormalizer.Normalise(language);
+        untaggedSnapshots  = GetAllUntaggedNonTrivialSnapshots(normalisedLanguage);
+        if (untaggedSnapshots.Count == 0)
+        {
+            return 0;
+        }
+
+        // ── 3. Intent-First Narrative ──
+        thesaurus        = ThesaurusEngine.LoadForWorkspace(workspaceRoot);
+        semanticEngine   = CpuSemanticEngine.LoadForWorkspace(workspaceRoot);
+        existingVocab    = GetAllDistinctTagsInDatabase();
+        totalToTag       = untaggedSnapshots.Count;
+        generatedEntries = new TraitEntry[totalToTag];
+        completedCount   = 0;
+
+        Parallel.For(0, totalToTag, index =>
+        {
+            var snap = untaggedSnapshots[index];
+            generatedEntries[index] = AutoTraitTagger.GenerateTraitsForSnapshot(
+                snap,
+                thesaurus,
+                existingVocab,
+                semanticEngine);
+
+            var current = Interlocked.Increment(ref completedCount);
+            if (onProgress is not null && (current % 250 == 0 || current == totalToTag))
+            {
+                onProgress(current, totalToTag);
+            }
+        });
+
+        // ── 4. Output / Return ──
+        return SaveTraitEntries(generatedEntries);
+    }
+
+    /// <summary>
+    /// Returns fast snapshot counts from <c>symbol_snapshots</c> so <see cref="ScanOrchestrator"/> can
+    /// detect whether <c>traits.db</c> has already been populated on disk across CLI invocations.
+    /// </summary>
+    public (int TotalSnapshots, int TrackableSnapshots, int UntaggedSnapshots) GetQuickSnapshotCounts(string? language = null)
+    {
+        // ── 1. Declarations ──
+        string? normalisedLanguage;
+        int totalSnapshots;
+        int trackableSnapshots;
+        int untaggedSnapshots;
+
+        // ── 2. Preconditions & Guard Clauses ──
+        normalisedLanguage = LanguageNormalizer.Normalise(language);
+        totalSnapshots     = 0;
+        trackableSnapshots = 0;
+        untaggedSnapshots  = 0;
+
+        // ── 3. Intent-First Narrative ──
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+                COUNT(*) AS total_cnt,
+                SUM(CASE WHEN s.is_trivial = 0 THEN 1 ELSE 0 END) AS trackable_cnt,
+                SUM(CASE WHEN s.is_trivial = 0 AND e.body_hash IS NULL THEN 1 ELSE 0 END) AS untagged_cnt
+            FROM symbol_snapshots s
+            LEFT JOIN trait_entries e ON e.body_hash = s.body_hash
+            WHERE (@lang IS NULL OR s.language = @lang COLLATE NOCASE);
+            """;
+        cmd.Parameters.AddWithValue("@lang", (object?)normalisedLanguage ?? DBNull.Value);
+
+        using (var reader = cmd.ExecuteReader())
+        {
+            if (reader.Read())
+            {
+                totalSnapshots     = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
+                trackableSnapshots = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
+                untaggedSnapshots  = reader.IsDBNull(2) ? 0 : reader.GetInt32(2);
+            }
+        }
+
+        // ── 4. Output / Return ──
+        return (totalSnapshots, trackableSnapshots, untaggedSnapshots);
+    }
+
+    /// <summary>
     /// Computes the current traits coverage statistics for the repository.
     /// </summary>
     public TraitsCoverageSummary GetCoverageSummary(bool isScanInProgress, string? language = null)
@@ -340,6 +440,8 @@ public sealed class TraitQueries(SqliteConnection connection)
         string? normalisedLanguage;
         int totalTrackable;
         int taggedCount;
+        int aiTaggedCount;
+        int autoCpuTaggedCount;
         int trivialCount;
         int untaggedCount;
         string notice;
@@ -353,6 +455,8 @@ public sealed class TraitQueries(SqliteConnection connection)
             SELECT
                 SUM(CASE WHEN s.is_trivial = 0 THEN 1 ELSE 0 END) AS trackable,
                 SUM(CASE WHEN s.is_trivial = 0 AND e.body_hash IS NOT NULL THEN 1 ELSE 0 END) AS tagged,
+                SUM(CASE WHEN s.is_trivial = 0 AND e.tag_source = 'ai' THEN 1 ELSE 0 END) AS ai_tagged,
+                SUM(CASE WHEN s.is_trivial = 0 AND e.tag_source = 'auto-cpu' THEN 1 ELSE 0 END) AS auto_tagged,
                 SUM(CASE WHEN s.is_trivial = 1 THEN 1 ELSE 0 END) AS trivial
             FROM symbol_snapshots s
             LEFT JOIN trait_entries e ON e.body_hash = s.body_hash
@@ -360,22 +464,32 @@ public sealed class TraitQueries(SqliteConnection connection)
             """;
         cmd.Parameters.AddWithValue("@lang", (object?)normalisedLanguage ?? DBNull.Value);
 
-        totalTrackable = 0;
-        taggedCount    = 0;
-        trivialCount   = 0;
+        totalTrackable     = 0;
+        taggedCount        = 0;
+        aiTaggedCount      = 0;
+        autoCpuTaggedCount = 0;
+        trivialCount       = 0;
 
         using (var reader = cmd.ExecuteReader())
         {
             if (reader.Read())
             {
-                totalTrackable = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
-                taggedCount    = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
-                trivialCount   = reader.IsDBNull(2) ? 0 : reader.GetInt32(2);
+                totalTrackable     = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
+                taggedCount        = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
+                aiTaggedCount      = reader.IsDBNull(2) ? 0 : reader.GetInt32(2);
+                autoCpuTaggedCount = reader.IsDBNull(3) ? 0 : reader.GetInt32(3);
+                trivialCount       = reader.IsDBNull(4) ? 0 : reader.GetInt32(4);
             }
         }
 
         untaggedCount = Math.Max(0, totalTrackable - taggedCount);
-        notice        = BuildCoverageNotice(totalTrackable, taggedCount, untaggedCount, isScanInProgress);
+        notice        = BuildCoverageNotice(
+            totalTrackable,
+            taggedCount,
+            aiTaggedCount,
+            autoCpuTaggedCount,
+            untaggedCount,
+            isScanInProgress);
 
         // ── 4. Output / Return ──
         return new TraitsCoverageSummary(
@@ -656,6 +770,8 @@ public sealed class TraitQueries(SqliteConnection connection)
     private static string BuildCoverageNotice(
         int totalTrackable,
         int taggedCount,
+        int aiTaggedCount,
+        int autoCpuTaggedCount,
         int untaggedCount,
         bool isScanInProgress)
     {
@@ -671,7 +787,12 @@ public sealed class TraitQueries(SqliteConnection connection)
 
         if (untaggedCount > 0)
         {
-            return $"{taggedCount}/{totalTrackable} symbols tagged. {untaggedCount} symbols are untagged—call 'get_untagged_batch' to tag them.";
+            return $"{taggedCount}/{totalTrackable} symbols tagged ({autoCpuTaggedCount} auto-cpu, {aiTaggedCount} ai). {untaggedCount} symbols are untagged—call 'get_untagged_batch' to tag them.";
+        }
+
+        if (autoCpuTaggedCount > 0)
+        {
+            return $"100% coverage ({taggedCount}/{totalTrackable} non-trivial symbols tagged: {autoCpuTaggedCount} auto-cpu ONNX baseline, {aiTaggedCount} AI-detailed).";
         }
 
         return $"100% coverage ({taggedCount}/{totalTrackable} non-trivial symbols tagged).";
@@ -1531,6 +1652,32 @@ public sealed class TraitQueries(SqliteConnection connection)
         }
 
         return set;
+    }
+
+    private List<SymbolSnapshot> GetAllUntaggedNonTrivialSnapshots(string? normalisedLanguage)
+    {
+        var list = new List<SymbolSnapshot>();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT s.id, s.symbol_name, s.symbol_type, s.class_name, s.language,
+                   s.file_path, s.start_line, s.end_line, s.start_byte, s.end_byte,
+                   s.signature, s.doc_comment, s.body_hash, s.is_trivial, s.extracted_content
+            FROM symbol_snapshots s
+            LEFT JOIN trait_entries e ON e.body_hash = s.body_hash
+            WHERE s.is_trivial = 0
+              AND e.body_hash IS NULL
+              AND (@lang IS NULL OR s.language = @lang COLLATE NOCASE)
+            GROUP BY s.body_hash;
+            """;
+        cmd.Parameters.AddWithValue("@lang", (object?)normalisedLanguage ?? DBNull.Value);
+
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(ReadSymbolSnapshotFromReader(reader));
+        }
+
+        return list;
     }
 
     private List<SymbolSnapshot> GetUntaggedSnapshotsByLanguageAndType(string language, string symbolType)

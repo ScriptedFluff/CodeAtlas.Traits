@@ -95,7 +95,7 @@ public sealed class CodeAtlasCliClient : ICodeAtlasCliClient
         List<AtlasSymbolDto> allSymbols;
         long cursor;
         bool hasMore;
-        const int pageSize = 500;
+        const int pageSize = 25000;
 
         // ── 2. Preconditions & Guard Clauses ──
         cliPath = CodeAtlasLocator.ResolveCliPath(_explicitCliPath);
