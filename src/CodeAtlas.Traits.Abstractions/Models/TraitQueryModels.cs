@@ -130,5 +130,16 @@ public sealed record TagUsageCount(
     int SymbolCount,
     int UniqueBodyCount);
 
+/// <summary>
+/// Usage count summary for a multi-trait combination (symbols sharing the same capability/technology tag set).
+/// </summary>
+public sealed record TagCombinationCount(
+    string TagSignature,
+    IReadOnlyList<string> Tags,
+    int TagCount,
+    int SymbolCount,
+    int UniqueBodyCount);
+
+
 
 

@@ -20,7 +20,8 @@ public sealed record TopTagsResponse(
     string Message,
     ScanProgressSnapshot ScanProgress,
     TraitsCoverageSummary? Coverage,
-    IReadOnlyList<TagUsageCount> TopTags);
+    IReadOnlyList<TagUsageCount> TopTags,
+    IReadOnlyList<TagCombinationCount>? TopCombinations = null);
 
 [McpServerToolType]
 public sealed class SearchTraitsTool(
@@ -101,13 +102,15 @@ public sealed class SearchTraitsTool(
 
     [McpServerTool]
     [Description("""
-        Returns the most frequently used capability and technology tags across non-trivial symbols in the repository, ranked by symbol count and unique body_hash count.
-        Useful for discovering what capabilities, domain concepts, and libraries exist in the codebase before running 'search_traits'.
+        Returns the most frequently used capability and technology tags (and recurring multi-trait combinations) across non-trivial symbols in the repository.
+        Useful for discovering what capabilities, domain concepts, and libraries exist in the codebase, or spotting multi-trait capability duplication where multiple distinct bodies share the same combination of 3+ traits.
         """)]
     public async Task<TopTagsResponse> GetTopTagsAsync(
         [Description("Optional: filter by programming language (e.g. csharp, typescript, javascript, powershell).")] string? language = null,
         [Description("Optional: filter by symbol type (Class, Method, Function).")] string? symbolType = null,
         [Description("Optional: if true, counts tags only across generic/reusable utility methods and classes.")] bool? onlyUtilities = null,
+        [Description("Optional: if true (default), also returns recurring multi-trait combinations (>= minCombinationTags).")] bool includeCombinations = true,
+        [Description("Optional: minimum number of traits in a multi-trait combination (default 3).")] int minCombinationTags = 3,
         [Description("Optional: maximum number of tags to return (default 50, max 500).")] int limit = 50,
         [Description("Optional: if false (default), returns early with 'scanning_in_progress' if a cold scan takes >1.5s. Set true to block until scan completion.")] bool completeOnlyResponse = false,
         [Description("Optional: target repository/workspace directory (defaults to active workspace).")] string? targetDirectory = null,
@@ -119,6 +122,7 @@ public sealed class SearchTraitsTool(
         string? resolvedLanguage;
         ScanProgressSnapshot scanSnapshot;
         IReadOnlyList<TagUsageCount> topTags;
+        IReadOnlyList<TagCombinationCount>? topCombinations;
         TraitsCoverageSummary coverage;
 
         // ── 2. Preconditions & Guard Clauses ──
@@ -148,16 +152,20 @@ public sealed class SearchTraitsTool(
         using var db = new TraitsDb(workspace.TraitsDbPath);
         db.Migrate();
 
-        topTags  = db.Traits.GetTopTags(resolvedLanguage, symbolType, onlyUtilities, limit);
+        topTags         = db.Traits.GetTopTags(resolvedLanguage, symbolType, onlyUtilities, limit);
+        topCombinations = includeCombinations
+            ? db.Traits.GetTopTagCombinations(resolvedLanguage, symbolType, onlyUtilities, minCombinationTags, limit)
+            : null;
         coverage = db.Traits.GetCoverageSummary(scanSnapshot.State == ScanState.ScanningInProgress, resolvedLanguage);
 
         // ── 4. Output / Return ──
         return new TopTagsResponse(
-            Status:       "ok",
-            Message:      $"Returned top {topTags.Count} most used tag(s). {coverage.Notice}",
-            ScanProgress: scanSnapshot,
-            Coverage:     coverage,
-            TopTags:      topTags);
+            Status:          "ok",
+            Message:         $"Returned top {topTags.Count} most used tag(s) and {topCombinations?.Count ?? 0} multi-trait combination(s). {coverage.Notice}",
+            ScanProgress:    scanSnapshot,
+            Coverage:        coverage,
+            TopTags:         topTags,
+            TopCombinations: topCombinations);
     }
 
     private static string ResolveTargetDirectory(string? targetDirectory, RepoContext repoContext)

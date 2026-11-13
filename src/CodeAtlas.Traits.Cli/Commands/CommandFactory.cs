@@ -198,6 +198,7 @@ public static class CommandFactory
         Option<string?> langOpt;
         Option<string?> typeOpt;
         Option<bool?> utilityOpt;
+        Option<int> minTagsOpt;
         Option<int> limitOpt;
         Option<bool> jsonOpt;
         Command cmd;
@@ -208,19 +209,21 @@ public static class CommandFactory
         langOpt    = new Option<string?>(new[] { "--language", "--lang" }, "Filter by programming language (e.g. csharp, typescript)");
         typeOpt    = new Option<string?>("--type", "Filter by symbol type (Class, Method, Function)");
         utilityOpt = new Option<bool?>("--utility", "Filter by utility status (true/false)");
-        limitOpt   = new Option<int>(new[] { "--limit", "-l" }, () => 50, "Maximum number of tags to return");
+        minTagsOpt = new Option<int>(new[] { "--min-tags", "--combos", "-c" }, () => 1, "Minimum traits per combination (default 1 = single tags; set >= 2 or >= 3 to group by multi-trait combinations)");
+        limitOpt   = new Option<int>(new[] { "--limit", "-l" }, () => 50, "Maximum number of tags or combinations to return");
         jsonOpt    = new Option<bool>("--json", "Output tag frequency counts as JSON");
 
-        cmd = new Command("tags", "List the most frequently used capability and technology tags in the repository");
+        cmd = new Command("tags", "List the most frequently used capability tags (--min-tags 1) or multi-trait combinations (--min-tags 3) in the repository");
         cmd.AddOption(repoOpt);
         cmd.AddOption(dbDirOpt);
         cmd.AddOption(langOpt);
         cmd.AddOption(typeOpt);
         cmd.AddOption(utilityOpt);
+        cmd.AddOption(minTagsOpt);
         cmd.AddOption(limitOpt);
         cmd.AddOption(jsonOpt);
 
-        cmd.SetHandler(async (repo, dbDir, lang, type, utility, limit, json) =>
+        cmd.SetHandler(async (repo, dbDir, lang, type, utility, minTags, limit, json) =>
         {
             await ExecuteTagsCommandAsync(
                 repo?.FullName ?? Environment.CurrentDirectory,
@@ -228,9 +231,11 @@ public static class CommandFactory
                 lang,
                 type,
                 utility,
-                limit,
-                json);
-        }, repoOpt, dbDirOpt, langOpt, typeOpt, utilityOpt, limitOpt, jsonOpt);
+                showCombinations: minTags >= 2,
+                minTags: Math.Max(2, minTags),
+                limit: limit,
+                isJson: json);
+        }, repoOpt, dbDirOpt, langOpt, typeOpt, utilityOpt, minTagsOpt, limitOpt, jsonOpt);
 
         // ── 3. Output / Return ──
         return cmd;
@@ -832,6 +837,8 @@ public static class CommandFactory
         string? language,
         string? symbolType,
         bool? onlyUtilities,
+        bool showCombinations,
+        int minTags,
         int limit,
         bool isJson)
     {
@@ -839,6 +846,7 @@ public static class CommandFactory
         WorkspaceInfo workspace;
         ScanOrchestrator orchestrator;
         IReadOnlyList<TagUsageCount> topTags;
+        IReadOnlyList<TagCombinationCount> topCombos;
 
         // ── 2. Intent-First Narrative ──
         workspace    = WorkspacePathResolver.ResolveWorkspace(repoRoot, customDbDir);
@@ -852,6 +860,32 @@ public static class CommandFactory
 
         using var db = new TraitsDb(workspace.TraitsDbPath);
         db.Migrate();
+
+        if (showCombinations)
+        {
+            topCombos = db.Traits.GetTopTagCombinations(language, symbolType, onlyUtilities, minTags, limit);
+            if (isJson)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(topCombos, CliJsonContext.Default.IReadOnlyListTagCombinationCount));
+                return;
+            }
+
+            if (topCombos.Count == 0)
+            {
+                Console.WriteLine("No multi-trait combinations found.");
+                return;
+            }
+
+            Console.WriteLine($"Top {topCombos.Count} recurring multi-trait combination(s) (>= {minTags} traits) in {workspace.WorkspaceRoot}:");
+            for (var i = 0; i < topCombos.Count; i++)
+            {
+                var combo = topCombos[i];
+                Console.WriteLine($"  {i + 1,3}. [{combo.UniqueBodyCount,4} unique bodies | {combo.SymbolCount,4} symbols] ({combo.TagCount} traits): {combo.TagSignature}");
+            }
+
+            return;
+        }
+
         topTags = db.Traits.GetTopTags(language, symbolType, onlyUtilities, limit);
 
         // ── 3. Output / Return ──

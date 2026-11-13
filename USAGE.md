@@ -30,17 +30,17 @@ CodeAtlas.Traits scan D:\Projects\MyRepo
 CodeAtlas.Traits scan D:\Projects\MyRepo --json
 ```
 
-### 2.2 List Most Used Tags (`tags`)
-Lists the most frequently used capability and technology tags across non-trivial symbols in the repository, ranked by symbol count and unique `body_hash` count:
+### 2.2 List Most Used Tags & Multi-Trait Combinations (`tags`)
+Lists the most frequently used single tags (`--min-tags 1`, default) or recurring **multi-trait combinations** (`--min-tags 3` or `-c 3`) across non-trivial symbols in the repository:
 ```powershell
-# Top 50 most used tags in the repository
+# Top 50 most used single tags in the repository
 CodeAtlas.Traits tags -r D:\Projects\MyRepo
 
-# Top 25 tags across reusable C# utility methods/classes
-CodeAtlas.Traits tags -r D:\Projects\MyRepo --lang csharp --utility true --limit 25
+# Top 25 recurring multi-trait combinations (symbols sharing >= 4 traits) in C#
+CodeAtlas.Traits tags -r D:\Projects\MyRepo --lang csharp --min-tags 4 --limit 25
 
 # Output JSON
-CodeAtlas.Traits tags -r D:\Projects\MyRepo --json
+CodeAtlas.Traits tags -r D:\Projects\MyRepo --min-tags 3 --json
 ```
 
 ### 2.3 Search by Capability, Technology & Language Tags (`query`)

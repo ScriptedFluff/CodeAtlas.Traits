@@ -492,6 +492,90 @@ public sealed class TraitQueries(SqliteConnection connection)
     }
 
     /// <summary>
+    /// Returns the most frequently recurring multi-trait combinations across non-trivial symbols
+    /// (requiring at least <paramref name="minTags"/> traits per symbol) so multi-trait capability duplication can be spotted.
+    /// </summary>
+    public IReadOnlyList<TagCombinationCount> GetTopTagCombinations(
+        string? language = null,
+        string? symbolType = null,
+        bool? onlyUtilities = null,
+        int minTags = 3,
+        int limit = 50)
+    {
+        // ── 1. Declarations ──
+        string? normalisedLanguage;
+        string? normalisedType;
+        int? utilityFlag;
+        int effectiveMinTags;
+        int effectiveLimit;
+        List<TagCombinationCount> results;
+
+        // ── 2. Preconditions & Guard Clauses ──
+        normalisedLanguage = LanguageNormalizer.Normalise(language);
+        normalisedType     = string.IsNullOrWhiteSpace(symbolType) ? null : symbolType.Trim();
+        utilityFlag        = onlyUtilities.HasValue ? (onlyUtilities.Value ? 1 : 0) : null;
+        effectiveMinTags   = Math.Clamp(minTags, 2, 12);
+        effectiveLimit     = Math.Clamp(limit, 1, 500);
+        results            = [];
+
+        // ── 3. Intent-First Narrative ──
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = """
+                WITH body_tag_sets AS (
+                    SELECT t.body_hash,
+                           COUNT(*) AS tag_cnt,
+                           GROUP_CONCAT(t.tag, ', ') AS tag_sig
+                    FROM (
+                        SELECT body_hash, LOWER(tag) AS tag
+                        FROM trait_tags
+                        GROUP BY body_hash, LOWER(tag)
+                        ORDER BY body_hash, LOWER(tag)
+                    ) t
+                    GROUP BY t.body_hash
+                    HAVING COUNT(*) >= @minTags
+                )
+                SELECT b.tag_sig,
+                       b.tag_cnt,
+                       COUNT(DISTINCT s.id)        AS symbol_cnt,
+                       COUNT(DISTINCT s.body_hash) AS body_cnt
+                FROM body_tag_sets b
+                JOIN trait_entries e    ON e.body_hash = b.body_hash
+                JOIN symbol_snapshots s ON s.body_hash = b.body_hash
+                WHERE s.is_trivial = 0
+                  AND (@lang IS NULL OR s.language = @lang COLLATE NOCASE)
+                  AND (@type IS NULL OR s.symbol_type = @type COLLATE NOCASE)
+                  AND (@util IS NULL OR e.is_utility = @util)
+                GROUP BY b.tag_sig, b.tag_cnt
+                HAVING COUNT(DISTINCT s.id) > 1
+                ORDER BY body_cnt DESC, symbol_cnt DESC, b.tag_cnt DESC, b.tag_sig ASC
+                LIMIT @limit;
+                """;
+            cmd.Parameters.AddWithValue("@minTags", effectiveMinTags);
+            cmd.Parameters.AddWithValue("@lang", (object?)normalisedLanguage ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@type", (object?)normalisedType ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@util", (object?)utilityFlag ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@limit", effectiveLimit);
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var sig  = reader.GetString(0);
+                var tags = sig.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                results.Add(new TagCombinationCount(
+                    TagSignature:    sig,
+                    Tags:            tags,
+                    TagCount:        reader.GetInt32(1),
+                    SymbolCount:     reader.GetInt32(2),
+                    UniqueBodyCount: reader.GetInt32(3)));
+            }
+        }
+
+        // ── 4. Output / Return ──
+        return results;
+    }
+
+    /// <summary>
     /// Computes the current traits coverage statistics for the repository.
     /// </summary>
     public TraitsCoverageSummary GetCoverageSummary(bool isScanInProgress, string? language = null)
