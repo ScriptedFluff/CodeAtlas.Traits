@@ -2,6 +2,9 @@
 
 > **The capability and behaviour layer for [CodeAtlas](https://github.com/ScriptedFluff/CodeAtlas). Index methods and classes by what they do, not just what they're named.**
 
+> [!WARNING]
+> **Alpha Stage — Volatile Codebase**: `CodeAtlas.Traits` is currently in active **Alpha** development. Its database schema (`traits.db`), CLI commands, MCP tool contracts, and internal APIs are still evolving rapidly and may change without notice.
+
 ---
 
 ## 🎯 Overview
