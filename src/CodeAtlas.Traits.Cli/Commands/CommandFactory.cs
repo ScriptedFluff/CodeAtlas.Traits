@@ -198,6 +198,7 @@ public static class CommandFactory
         Option<string?> langOpt;
         Option<string?> typeOpt;
         Option<bool?> utilityOpt;
+        Option<bool> combosOpt;
         Option<int> minTagsOpt;
         Option<int> limitOpt;
         Option<bool> jsonOpt;
@@ -209,21 +210,23 @@ public static class CommandFactory
         langOpt    = new Option<string?>(new[] { "--language", "--lang" }, "Filter by programming language (e.g. csharp, typescript)");
         typeOpt    = new Option<string?>("--type", "Filter by symbol type (Class, Method, Function)");
         utilityOpt = new Option<bool?>("--utility", "Filter by utility status (true/false)");
-        minTagsOpt = new Option<int>(new[] { "--min-tags", "--combos", "-c" }, () => 1, "Minimum traits per combination (default 1 = single tags; set >= 2 or >= 3 to group by multi-trait combinations)");
+        combosOpt  = new Option<bool>(new[] { "--combos", "-c" }, "Group by multi-trait combinations (2+ or 3+ shared traits) rather than single tags");
+        minTagsOpt = new Option<int>("--min-tags", () => 3, "Minimum number of traits in a combination when --combos is enabled");
         limitOpt   = new Option<int>(new[] { "--limit", "-l" }, () => 50, "Maximum number of tags or combinations to return");
         jsonOpt    = new Option<bool>("--json", "Output tag frequency counts as JSON");
 
-        cmd = new Command("tags", "List the most frequently used capability tags (--min-tags 1) or multi-trait combinations (--min-tags 3) in the repository");
+        cmd = new Command("tags", "List the most frequently used capability tags or multi-trait combinations (--combos) in the repository");
         cmd.AddOption(repoOpt);
         cmd.AddOption(dbDirOpt);
         cmd.AddOption(langOpt);
         cmd.AddOption(typeOpt);
         cmd.AddOption(utilityOpt);
+        cmd.AddOption(combosOpt);
         cmd.AddOption(minTagsOpt);
         cmd.AddOption(limitOpt);
         cmd.AddOption(jsonOpt);
 
-        cmd.SetHandler(async (repo, dbDir, lang, type, utility, minTags, limit, json) =>
+        cmd.SetHandler(async (repo, dbDir, lang, type, utility, combos, minTags, limit) =>
         {
             await ExecuteTagsCommandAsync(
                 repo?.FullName ?? Environment.CurrentDirectory,
@@ -231,11 +234,11 @@ public static class CommandFactory
                 lang,
                 type,
                 utility,
-                showCombinations: minTags >= 2,
-                minTags: Math.Max(2, minTags),
-                limit: limit,
-                isJson: json);
-        }, repoOpt, dbDirOpt, langOpt, typeOpt, utilityOpt, minTagsOpt, limitOpt, jsonOpt);
+                combos,
+                minTags,
+                limit,
+                isJson: false);
+        }, repoOpt, dbDirOpt, langOpt, typeOpt, utilityOpt, combosOpt, minTagsOpt, limitOpt);
 
         // ── 3. Output / Return ──
         return cmd;
