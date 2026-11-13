@@ -35,10 +35,15 @@ public static class AutoTraitTagger
 
         // ── 2. Intent-First Narrative ──
         combinedSourceText = $"{snapshot.SymbolName} {snapshot.Signature} {snapshot.DocComment} {snapshot.ExtractedContent}";
-        var rawTokens      = combinedSourceText.ExtractCodeWordTokens();
         extractedTags      = [];
         seenTags           = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+#if ENABLE_CPU_AUTO_TAGS
+        // CPU keyword/thesaurus auto-tagging is disabled by default so 'auto-cpu' only indexes ONNX semantic embeddings
+        // and leaves behavioural trait tagging to Gemini/Copilot ('ai').
+        // To re-enable CPU keyword auto-tagging, uncomment <DefineConstants>$(DefineConstants);ENABLE_CPU_AUTO_TAGS</DefineConstants>
+        // in CodeAtlas.Traits.Core.csproj or build with -p:DefineConstants=ENABLE_CPU_AUTO_TAGS.
+        var rawTokens = combinedSourceText.ExtractCodeWordTokens();
         foreach (var token in rawTokens)
         {
             if (LanguageNormalizer.TryExtractLanguageTag(token, out _))
@@ -71,6 +76,7 @@ public static class AutoTraitTagger
                 }
             }
         }
+#endif
 
         isUtility       = InferIsUtility(snapshot);
         summary         = BuildAutoSummary(snapshot, extractedTags);
