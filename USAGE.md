@@ -204,3 +204,22 @@ Example custom dictionary pack (`.codeatlas/dictionaries/custom.json`):
   ]
 }
 ```
+
+---
+
+## 6. Workspace Filtering Configuration (`.codeatlas/settings.json`)
+
+`CodeAtlas.Traits` shares `.codeatlas/settings.json` (and `appsettings.json`) with `CodeAtlas`. You can exclude test projects, generated files, or specific folders from scanning and duplicate/trait queries using `ignorePatterns`, `ignoreDirectories`, or `includePatterns`:
+
+```json
+{
+  "ignorePatterns": [
+    "**/*Tests/**/*",
+    "**/*.Generated.cs"
+  ],
+  "ignoreDirectories": [
+    "Migrations",
+    "wwwroot/lib"
+  ]
+}
+```

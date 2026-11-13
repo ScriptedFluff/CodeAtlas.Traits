@@ -17,12 +17,13 @@ AI agents and developers frequently invent duplicate private utility methods bec
 - Searching for `"Jitter"` misses `RetryWithBackoffAsync`.
 - Grepping candidate files burns tens of thousands of LLM context tokens.
 
-`CodeAtlas.Traits` works alongside `CodeAtlas` as an AI-agnostic MCP server and CLI tool:
-- **Strict Separation**: `CodeAtlas` owns `.codeatlas/atlas.db`; `CodeAtlas.Traits` owns `.codeatlas/traits.db`. Neither touches the other's database.
-- **Auto-Discovery & Auto-Indexing**: Locates `CodeAtlas` via its cross-platform `<LocalApplicationData>/CodeAtlas/install.json` beacon (or `CODEATLAS_PATH` / `PATH`) and automatically triggers `codeatlas index` if `atlas.db` does not exist yet.
+`CodeAtlas.Traits` works alongside `CodeAtlas` as an AI-agnostic MCP server and CLI tool using a **Two-Tier Intelligence Model**:
+- **Tier 1 — Fast Local CPU Recall**: Pulls AST symbols from `CodeAtlas`, computes content-addressable `body_hash` values, seeds zero-cost structural traits, and indexes CPU-only ONNX semantic embeddings (`all-MiniLM-L6-v2` Int8) at zero API token cost.
+- **Tier 2 — High-Level AI Refinement (MCP)**: Connected AI companions (Antigravity / Gemini, GitHub Copilot, Claude) evaluate candidate clusters, enrich methods with behavioural traits, and gatekeep newly authored code against existing utilities and subsystem patterns.
+- **Strict Separation**: `CodeAtlas` owns `.codeatlas/atlas.db` (deterministic AST ground truth); `CodeAtlas.Traits` owns `.codeatlas/traits.db` (semantic traits, embeddings, and duplication clusters).
 - **Content-Addressable `body_hash`**:
-  - **Methods & Functions**: Hashed on their whitespace-normalised AST byte slice (`StartByte..EndByte`). Survives full re-indexes, formatting edits, and file moves.
-  - **Classes**: Hashed strictly on their contract skeleton (inheritance/interfaces, constructors, and non-private method signatures)—editing private implementation details never invalidates class traits.
+  - **Methods & Functions**: Hashed on their whitespace-normalised AST byte slice (`StartByte..EndByte`), separating executable bodies from interface/abstract contract signatures. Survives full re-indexes, formatting edits, and file moves.
+  - **Classes**: Hashed strictly on their contract skeleton (inheritance/interfaces, constructors, and non-private member signatures)—editing private implementation details never invalidates class traits.
 - **Timeout Guard (`completeOnlyResponse`)**: Defaults to `completeOnlyResponse = false` so cold scans taking longer than 1.5s return `"status": "scanning_in_progress"` immediately while continuing in the background, ensuring AI agents never assume the server timed out.
 
 ---
@@ -32,11 +33,12 @@ AI agents and developers frequently invent duplicate private utility methods bec
 | Tool | Description |
 | :--- | :--- |
 | **`search_traits`** | Search classes, methods, and functions by capability/technology tags (`"retry,polly,c#"`). Automatically normalises language tags (`"c#"`, `"typescript"`, `"powershell"`) to filter out non-matching language files. |
+| **`get_top_tags`** | Lists the most frequently used capability/technology tags and recurring multi-trait combinations (`>= 3` shared traits) across the repository. |
 | **`get_untagged_batch`** | Retrieves a batch of untagged (or `'auto-cpu'` baseline-tagged when `includeAutoTagged = true`) non-trivial symbols for Gemini, GitHub Copilot, or Claude to enrich with detailed `'ai'` traits. |
 | **`get_symbol_for_analysis`** | Retrieves the source body, signature, `body_hash`, and current tags of a specific symbol (`MyNamespace.MyClass:MyMethod` or `MyClass.cs:L35`) so Gemini or Copilot can analyse it. |
-| **`save_traits`** | Persists a batch of AI-generated detailed tags, 1-sentence behavioural summaries, and `isUtility` classifications into `traits.db` keyed by `body_hash` (`tag_source = 'ai'`). |
+| **`save_traits`** | Persists a batch of AI-generated detailed tags, 1-sentence behavioural summaries, `isUtility` flags, and semantic verdicts into `traits.db` keyed by `body_hash` (`tag_source = 'ai'`). |
 | **`tag_symbol`** | Directly inserts or upgrades detailed `'ai'` traits for a method/class by symbol name (`MyNamespace.MyClass:MyMethod`) or location (`MyClass.cs:L35`) in one step. |
-| **`find_duplicate_bodies`** | Detects exact structural/body duplicates (`GROUP BY body_hash HAVING COUNT(*) > 1`) across the repository for post-implementation cleanup. |
+| **`find_duplicate_bodies`** | Detects exact structural/body duplicates and rolls up multi-symbol file collisions into **Subsystem Duplication Clusters** for post-implementation cleanup. |
 | **`find_similar_traits`** | Detects semantic near-duplicates (different `body_hash` sharing multiple capability/technology tags). |
 | **`find_similar_to_location`** | Finds symbols similar in size, CPU ONNX semantic embedding, and capability/synonym traits to a target symbol (`MyNamespace.MyClass:MyMethod`, `MyClass:MyMethod`) or location (`MyClass.cs:L35`), auto-scanning and auto-tagging if needed. |
 | **`audit_diff_traits`** | Audits modified files from `git diff` for untagged symbols and capability overlaps with existing utilities. |
@@ -49,6 +51,10 @@ AI agents and developers frequently invent duplicate private utility methods bec
 ```bash
 # Scan a repository (auto-triggers CodeAtlas if atlas.db is missing)
 CodeAtlas.Traits scan <repo-path>
+
+# List most used tags or recurring multi-trait combinations
+CodeAtlas.Traits tags -r <repo-path>
+CodeAtlas.Traits tags -r <repo-path> --combos --min-tags 3
 
 # Query by capability, technology, and language tags
 CodeAtlas.Traits query --tags "retry,polly,c#" --utility true
@@ -71,7 +77,7 @@ CodeAtlas.Traits model download
 # List untagged non-trivial symbols
 CodeAtlas.Traits untagged --lang csharp --limit 25
 
-# Find exact duplicate method bodies across the codebase
+# Find exact duplicate method bodies and Subsystem Duplication Clusters
 CodeAtlas.Traits duplicates --lang csharp
 
 # Start the MCP stdio server
