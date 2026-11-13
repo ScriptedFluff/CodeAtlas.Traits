@@ -13,7 +13,8 @@ public sealed record FindDuplicatesResponse(
     string Status,
     string Message,
     ScanProgressSnapshot ScanProgress,
-    IReadOnlyList<DuplicateBodyGroup> DuplicateGroups);
+    IReadOnlyList<DuplicateBodyGroup> DuplicateGroups,
+    IReadOnlyList<SubsystemDuplicateCluster>? SubsystemClusters = null);
 
 public sealed record FindSimilarTraitsResponse(
     string Status,
@@ -40,6 +41,8 @@ public sealed class FindDuplicatesTool(
     public async Task<FindDuplicatesResponse> FindDuplicateBodiesAsync(
         [Description("Optional: filter by programming language (e.g. csharp, typescript, powershell).")] string? language = null,
         [Description("Optional: maximum number of duplicate groups to return (default 50).")] int limit = 50,
+        [Description("Optional: if false (default), excludes interface and abstract method contract signatures without executable bodies.")] bool includeContracts = false,
+        [Description("Optional: minimum statement/member weight required for standalone duplicate groups not belonging to a multi-symbol subsystem cluster (default 2).")] int minStatements = 2,
         [Description("Optional: if false (default), returns early with 'scanning_in_progress' if a cold scan takes >1.5s. Set true to wait until scanning completes.")] bool completeOnlyResponse = false,
         [Description("Optional: target repository/workspace directory (defaults to active workspace).")] string? targetDirectory = null,
         CancellationToken ct = default)
@@ -49,6 +52,7 @@ public sealed class FindDuplicatesTool(
         WorkspaceInfo workspace;
         ScanProgressSnapshot scanSnapshot;
         IReadOnlyList<DuplicateBodyGroup> duplicateGroups;
+        IReadOnlyList<SubsystemDuplicateCluster> subsystemClusters;
 
         // ── 2. Preconditions & Guard Clauses ──
         effectiveRepo = !string.IsNullOrWhiteSpace(targetDirectory)
@@ -68,23 +72,26 @@ public sealed class FindDuplicatesTool(
         if (scanSnapshot.State == ScanState.ScanningInProgress && !completeOnlyResponse)
         {
             return new FindDuplicatesResponse(
-                Status:          "scanning_in_progress",
-                Message:         "CodeAtlas.Traits is scanning missing repository information in the background. Call again with completeOnlyResponse: true to wait for completion.",
-                ScanProgress:    scanSnapshot,
-                DuplicateGroups: []);
+                Status:            "scanning_in_progress",
+                Message:           "CodeAtlas.Traits is scanning missing repository information in the background. Call again with completeOnlyResponse: true to wait for completion.",
+                ScanProgress:      scanSnapshot,
+                DuplicateGroups:   [],
+                SubsystemClusters: []);
         }
 
         using var db = new TraitsDb(workspace.TraitsDbPath);
         db.Migrate();
 
-        duplicateGroups = db.Traits.FindExactBodyDuplicates(language, limit);
+        duplicateGroups   = db.Traits.FindExactBodyDuplicates(language, limit, includeContracts, minStatements, onlyActionableDebt: true, workspace.WorkspaceRoot);
+        subsystemClusters = db.Traits.DetectSubsystemDuplicateClusters(language, includeContracts, onlyActionableDebt: true, workspace.WorkspaceRoot, limit);
 
         // ── 4. Output / Return ──
         return new FindDuplicatesResponse(
-            Status:          "ok",
-            Message:         $"Found {duplicateGroups.Count} duplicate body group(s).",
-            ScanProgress:    scanSnapshot,
-            DuplicateGroups: duplicateGroups);
+            Status:            "ok",
+            Message:           $"Found {duplicateGroups.Count} duplicate body group(s) and {subsystemClusters.Count} subsystem cluster(s).",
+            ScanProgress:      scanSnapshot,
+            DuplicateGroups:   duplicateGroups,
+            SubsystemClusters: subsystemClusters);
     }
 
     [McpServerTool(Name = "find_similar_traits")]

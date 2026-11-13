@@ -251,27 +251,40 @@ public static class CommandFactory
         Option<DirectoryInfo?> dbDirOpt;
         Option<string?> langOpt;
         Option<int> limitOpt;
+        Option<bool> includeContractsOpt;
+        Option<int> minStatementsOpt;
         Option<bool> jsonOpt;
         Command cmd;
 
         // ── 2. Intent-First Narrative ──
-        repoOpt  = new Option<DirectoryInfo?>(new[] { "--repo", "-r" }, "Repository path");
-        dbDirOpt = new Option<DirectoryInfo?>("--db-dir", "Override directory for SQLite databases");
-        langOpt  = new Option<string?>(new[] { "--language", "--lang" }, "Filter by language");
-        limitOpt = new Option<int>(new[] { "--limit", "-l" }, () => 50, "Maximum duplicate groups");
-        jsonOpt  = new Option<bool>("--json", "Output duplicates as JSON");
+        repoOpt             = new Option<DirectoryInfo?>(new[] { "--repo", "-r" }, "Repository path");
+        dbDirOpt            = new Option<DirectoryInfo?>("--db-dir", "Override directory for SQLite databases");
+        langOpt             = new Option<string?>(new[] { "--language", "--lang" }, "Filter by language");
+        limitOpt            = new Option<int>(new[] { "--limit", "-l" }, () => 50, "Maximum duplicate groups");
+        includeContractsOpt = new Option<bool>("--include-contracts", () => false, "Include interface and abstract signature declarations without executable bodies");
+        minStatementsOpt    = new Option<int>("--min-statements", () => 2, "Minimum statement/member weight for standalone duplicates outside a subsystem cluster");
+        jsonOpt             = new Option<bool>("--json", "Output duplicates as JSON");
 
-        cmd = new Command("duplicates", "Detect non-trivial methods and classes sharing identical body hashes");
+        cmd = new Command("duplicates", "Detect non-trivial methods and classes sharing identical body hashes and subsystem clusters");
         cmd.AddOption(repoOpt);
         cmd.AddOption(dbDirOpt);
         cmd.AddOption(langOpt);
         cmd.AddOption(limitOpt);
+        cmd.AddOption(includeContractsOpt);
+        cmd.AddOption(minStatementsOpt);
         cmd.AddOption(jsonOpt);
 
-        cmd.SetHandler(async (repo, dbDir, lang, limit, json) =>
+        cmd.SetHandler(async (repo, dbDir, lang, limit, includeContracts, minStatements, json) =>
         {
-            await ExecuteDuplicatesCommandAsync(repo?.FullName ?? Environment.CurrentDirectory, dbDir?.FullName, lang, limit, json);
-        }, repoOpt, dbDirOpt, langOpt, limitOpt, jsonOpt);
+            await ExecuteDuplicatesCommandAsync(
+                repo?.FullName ?? Environment.CurrentDirectory,
+                dbDir?.FullName,
+                lang,
+                limit,
+                includeContracts,
+                minStatements,
+                json);
+        }, repoOpt, dbDirOpt, langOpt, limitOpt, includeContractsOpt, minStatementsOpt, jsonOpt);
 
         // ── 3. Output / Return ──
         return cmd;
@@ -535,12 +548,15 @@ public static class CommandFactory
         string? customDbDir,
         string? language,
         int limit,
+        bool includeContracts,
+        int minStatements,
         bool isJson)
     {
         // ── 1. Declarations ──
         WorkspaceInfo workspace;
         ScanOrchestrator orchestrator;
         IReadOnlyList<DuplicateBodyGroup> groups;
+        IReadOnlyList<SubsystemDuplicateCluster> clusters;
 
         // ── 2. Intent-First Narrative ──
         workspace    = WorkspacePathResolver.ResolveWorkspace(repoRoot, customDbDir);
@@ -549,7 +565,8 @@ public static class CommandFactory
 
         using var db = new TraitsDb(workspace.TraitsDbPath);
         db.Migrate();
-        groups = db.Traits.FindExactBodyDuplicates(language, limit);
+        groups   = db.Traits.FindExactBodyDuplicates(language, limit, includeContracts, minStatements, onlyActionableDebt: true, workspace.WorkspaceRoot);
+        clusters = db.Traits.DetectSubsystemDuplicateClusters(language, includeContracts, onlyActionableDebt: true, workspace.WorkspaceRoot, limit);
 
         // ── 3. Output / Return ──
         if (isJson)
@@ -558,9 +575,20 @@ public static class CommandFactory
             return;
         }
 
+        if (clusters.Count > 0)
+        {
+            Console.WriteLine($"=== Subsystem Duplication Clusters ({clusters.Count}) ===");
+            foreach (var c in clusters)
+            {
+                Console.WriteLine($"  * {c.PrimaryFilePath} <-> {c.SecondaryFilePath} ({c.IdenticalSymbolCount} identical types/methods: {string.Join(", ", c.SymbolNames)})");
+            }
+            Console.WriteLine();
+        }
+
         foreach (var g in groups)
         {
-            Console.WriteLine($"BodyHash {g.BodyHash} ({g.OccurrenceCount} occurrences):");
+            var contractBadge = !g.HasExecutableBody ? " [CONTRACT SIGNATURE]" : "";
+            Console.WriteLine($"BodyHash {g.BodyHash} ({g.OccurrenceCount} occurrences, weight={g.StatementCount}){contractBadge}:");
             foreach (var loc in g.Locations)
             {
                 Console.WriteLine($"  - [{loc.SymbolType}] {loc.SymbolName} | {loc.FilePath}:{loc.StartLine}-{loc.EndLine}");

@@ -16,7 +16,10 @@ public sealed record TraitSearchMatch(
     string Summary,
     bool IsUtility,
     IReadOnlyList<string> Tags,
-    string TagSource = TraitEntry.SourceAiDetailed);
+    string TagSource = TraitEntry.SourceAiDetailed,
+    string? Category = null,
+    bool IsActionableDebt = true,
+    string? ClusterName = null);
 
 /// <summary>
 /// Represents an untagged (or baseline CPU auto-tagged) symbol candidate ready for an AI agent (Gemini, Copilot, Claude) to analyse and enrich with detailed traits.
@@ -46,7 +49,24 @@ public sealed record DuplicateBodyGroup(
     int OccurrenceCount,
     string? Summary,
     IReadOnlyList<string> Tags,
-    IReadOnlyList<DuplicateSymbolLocation> Locations);
+    IReadOnlyList<DuplicateSymbolLocation> Locations,
+    bool HasExecutableBody = true,
+    int StatementCount = 1,
+    string? Category = null,
+    bool IsActionableDebt = true,
+    string? ClusterName = null);
+
+/// <summary>
+/// Represents a file-pair or subsystem cluster where multiple sibling symbols in <see cref="PrimaryFilePath"/>
+/// are duplicated in <see cref="SecondaryFilePath"/> (e.g. copied DTO/stub hierarchies or shared utility files).
+/// </summary>
+public sealed record SubsystemDuplicateCluster(
+    string PrimaryFilePath,
+    string SecondaryFilePath,
+    int IdenticalSymbolCount,
+    IReadOnlyList<string> SymbolNames,
+    IReadOnlyList<string> BodyHashes,
+    string Summary);
 
 /// <summary>
 /// Location of one symbol instance within a <see cref="DuplicateBodyGroup"/>.

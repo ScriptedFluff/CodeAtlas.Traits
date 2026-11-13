@@ -32,6 +32,11 @@ public static class MigrationRunner
         {
             ApplyMigration(connection, 2, M002_TagSourceAndEmbeddings);
         }
+
+        if (currentVersion < 3)
+        {
+            ApplyMigration(connection, 3, M003_ContractWeightAndSemanticVerdicts);
+        }
     }
 
     private static void EnsureMigrationsTable(SqliteConnection connection)
@@ -104,5 +109,14 @@ public static class MigrationRunner
     private const string M002_TagSourceAndEmbeddings = """
         ALTER TABLE trait_entries ADD COLUMN tag_source TEXT NOT NULL DEFAULT 'ai';
         ALTER TABLE trait_entries ADD COLUMN embedding_blob BLOB;
+        """;
+
+    private const string M003_ContractWeightAndSemanticVerdicts = """
+        ALTER TABLE symbol_snapshots ADD COLUMN has_executable_body INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE symbol_snapshots ADD COLUMN statement_count INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE trait_entries ADD COLUMN category TEXT;
+        ALTER TABLE trait_entries ADD COLUMN is_actionable_debt INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE trait_entries ADD COLUMN cluster_name TEXT;
+        DELETE FROM symbol_snapshots;
         """;
 }

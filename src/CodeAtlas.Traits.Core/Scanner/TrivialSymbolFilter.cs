@@ -5,7 +5,8 @@ namespace CodeAtlas.Traits.Core.Scanner;
 
 /// <summary>
 /// Pre-filters symbols before AI capability tagging to eliminate noise
-/// (auto-properties, simple field-assignment constructors, trivial 1-line pass-throughs).
+/// (auto-properties, interface/abstract contract declarations without bodies,
+/// simple field-assignment constructors, trivial 1-line pass-throughs) and computes statement weight.
 /// </summary>
 public static class TrivialSymbolFilter
 {
@@ -32,17 +33,144 @@ public static class TrivialSymbolFilter
     }
 
     /// <summary>
-    /// Determines whether a method/function or class skeleton is trivial boilerplate
-    /// that does not warrant AI tagging.
+    /// Determines whether a symbol has an executable body (as opposed to an interface signature
+    /// or <c>abstract</c> / <c>extern</c> method declaration with <c>Body == null</c>).
     /// </summary>
-    public static bool IsTrivialSymbol(AtlasSymbolDto symbol, string extractedContent)
+    public static bool HasExecutableBody(
+        AtlasSymbolDto symbol,
+        string extractedContent,
+        IReadOnlyList<AtlasSymbolDto>? fileSymbols = null)
+    {
+        // ── 1. Declarations ──
+        string normalised;
+        AtlasSymbolDto? enclosingType;
+
+        // ── 2. Preconditions & Guard Clauses ──
+        if (string.IsNullOrWhiteSpace(extractedContent))
+        {
+            return false;
+        }
+
+        if (string.Equals(symbol.Type, "Class", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // ── 3. Intent-First Narrative ──
+        if (fileSymbols is not null && fileSymbols.Count > 0)
+        {
+            enclosingType = fileSymbols.FirstOrDefault(c =>
+                (string.Equals(c.Type, "Interface", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(c.Type, "Class", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(c.Type, "Struct", StringComparison.OrdinalIgnoreCase)) &&
+                c.StartLine <= symbol.StartLine &&
+                c.EndLine >= symbol.EndLine &&
+                !ReferenceEquals(c, symbol));
+
+            if (enclosingType is not null &&
+                string.Equals(enclosingType.Type, "Interface", StringComparison.OrdinalIgnoreCase) &&
+                !extractedContent.Contains('{') &&
+                !extractedContent.Contains("=>", StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        normalised = extractedContent.NormaliseWhitespace();
+
+        // Any method/function declaration that contains neither a block '{' nor an expression body '=>'
+        // is a pure signature contract (interface method, abstract method, extern, or TypeScript overload/ambient signature).
+        if (!normalised.Contains('{') && !normalised.Contains("=>", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (normalised.StartsWith("abstract ", StringComparison.Ordinal) ||
+            normalised.Contains(" abstract ", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // ── 4. Output / Return ──
+        return true;
+    }
+
+    /// <summary>
+    /// Computes a lightweight cognitive weight / statement count for a symbol so single-statement
+    /// or single-property boilerplate can be distinguished from multi-statement logic.
+    /// </summary>
+    public static int EstimateStatementCount(
+        AtlasSymbolDto symbol,
+        string extractedContent,
+        bool hasExecutableBody)
+    {
+        // ── 1. Declarations ──
+        string[] lines;
+        int memberCount;
+        string normalised;
+        int openBrace;
+        int closeBrace;
+        string bodySlice;
+        int semicolons;
+        int arrows;
+        int branches;
+
+        // ── 2. Preconditions & Guard Clauses ──
+        if (!hasExecutableBody || string.IsNullOrWhiteSpace(extractedContent))
+        {
+            return 0;
+        }
+
+        // ── 3. Intent-First Narrative ──
+        if (string.Equals(symbol.Type, "Class", StringComparison.OrdinalIgnoreCase))
+        {
+            lines       = extractedContent.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            memberCount = Math.Max(0, lines.Length - 1);
+            if (lines.Length > 0 && HasClassInheritanceList(lines[0]))
+            {
+                memberCount++;
+            }
+
+            return memberCount;
+        }
+
+        normalised = extractedContent.NormaliseWhitespace();
+        openBrace  = normalised.IndexOf('{');
+        closeBrace = normalised.LastIndexOf('}');
+
+        if (openBrace >= 0 && closeBrace > openBrace)
+        {
+            bodySlice = normalised[(openBrace + 1)..closeBrace];
+        }
+        else
+        {
+            var arrowIdx = normalised.IndexOf("=>", StringComparison.Ordinal);
+            bodySlice = arrowIdx >= 0 ? normalised[(arrowIdx + 2)..] : normalised;
+        }
+
+        semicolons = bodySlice.Count(ch => ch == ';');
+        arrows     = CountSubstringOccurrences(bodySlice, "=>");
+        branches   = CountBranchKeywords(bodySlice);
+
+        // ── 4. Output / Return ──
+        return Math.Max(1, semicolons + arrows + branches);
+    }
+
+    /// <summary>
+    /// Determines whether a method/function or class skeleton is trivial boilerplate
+    /// that does not warrant standalone AI tagging or standalone duplication alerts.
+    /// </summary>
+    public static bool IsTrivialSymbol(
+        AtlasSymbolDto symbol,
+        string extractedContent,
+        bool hasExecutableBody = true)
     {
         // ── 1. Declarations ──
         string normalisedContent;
         int lineSpan;
 
         // ── 2. Preconditions & Guard Clauses ──
-        if (string.IsNullOrWhiteSpace(extractedContent))
+        if (!hasExecutableBody || string.IsNullOrWhiteSpace(extractedContent))
         {
             return true;
         }
@@ -104,6 +232,35 @@ public static class TrivialSymbolFilter
         return false;
     }
 
+    internal static bool HasClassInheritanceList(string classHeaderLine)
+    {
+        // ── 1. Declarations ──
+        int colonIndex;
+        string afterColon;
+
+        // ── 2. Preconditions & Guard Clauses ──
+        colonIndex = classHeaderLine.IndexOf(':');
+        if (colonIndex < 0 || colonIndex + 1 >= classHeaderLine.Length)
+        {
+            return false;
+        }
+
+        // ── 3. Intent-First Narrative ──
+        afterColon = classHeaderLine[(colonIndex + 1)..].Trim();
+        if (string.IsNullOrWhiteSpace(afterColon) ||
+            afterColon.StartsWith("public ", StringComparison.Ordinal) ||
+            afterColon.StartsWith("internal ", StringComparison.Ordinal) ||
+            afterColon.StartsWith("private ", StringComparison.Ordinal) ||
+            afterColon.StartsWith("protected ", StringComparison.Ordinal) ||
+            afterColon.StartsWith("class ", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // ── 4. Output / Return ──
+        return true;
+    }
+
     private static bool IsTrivialClassSkeleton(string skeletonText)
     {
         // ── 1. Declarations ──
@@ -114,7 +271,7 @@ public static class TrivialSymbolFilter
 
         // ── 3. Output / Return ──
         // A class with no inheritance and zero non-private methods/constructors is a pure DTO/marker.
-        return lines.Length <= 1 && !lines[0].Contains(':');
+        return lines.Length <= 1 && (lines.Length == 0 || !HasClassInheritanceList(lines[0]));
     }
 
     private static bool IsAutoPropertyOrEmptyBody(string normalisedContent)
@@ -180,5 +337,42 @@ public static class TrivialSymbolFilter
         return expressionBody.Length > 0 &&
                expressionBody.Length < 25 &&
                expressionBody.All(ch => char.IsLetterOrDigit(ch) || ch == '_');
+    }
+
+    private static int CountSubstringOccurrences(string text, string pattern)
+    {
+        // ── 1. Declarations ──
+        int count;
+        int idx;
+
+        // ── 2. Intent-First Narrative ──
+        count = 0;
+        idx   = 0;
+        while ((idx = text.IndexOf(pattern, idx, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            idx += pattern.Length;
+        }
+
+        // ── 3. Output / Return ──
+        return count;
+    }
+
+    private static int CountBranchKeywords(string bodySlice)
+    {
+        // ── 1. Declarations ──
+        int count;
+        string[] keywords;
+
+        // ── 2. Intent-First Narrative ──
+        count    = 0;
+        keywords = ["if (", "if(", "for (", "for(", "foreach (", "foreach(", "while (", "while(", "switch (", "switch(", "catch"];
+        foreach (var kw in keywords)
+        {
+            count += CountSubstringOccurrences(bodySlice, kw);
+        }
+
+        // ── 3. Output / Return ──
+        return count;
     }
 }

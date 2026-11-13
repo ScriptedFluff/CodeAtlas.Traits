@@ -235,18 +235,26 @@ public sealed class ScanOrchestrator
         Stopwatch stopwatch)
     {
         // ── 1. Declarations ──
+        TraitsAppConfig config;
         List<SymbolSnapshot> allSnapshots;
         IEnumerable<IGrouping<string, AtlasSymbolDto>> symbolsByFile;
         int processedCount;
 
         // ── 2. Intent-First Narrative ──
+        config         = TraitsAppConfig.Load(workspaceRoot);
         allSnapshots   = new List<SymbolSnapshot>(atlasSymbols.Count);
         symbolsByFile  = atlasSymbols.GroupBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase);
         processedCount = 0;
 
         foreach (var fileGroup in symbolsByFile)
         {
-            var fileSymbols   = fileGroup.ToList();
+            var fileSymbols = fileGroup.ToList();
+            if (config.IsPathIgnored(fileGroup.Key))
+            {
+                processedCount += fileSymbols.Count;
+                continue;
+            }
+
             var fileSnapshots = BodyHasher.ComputeSnapshotsForFile(workspaceRoot, fileGroup.Key, fileSymbols);
             allSnapshots.AddRange(fileSnapshots);
 

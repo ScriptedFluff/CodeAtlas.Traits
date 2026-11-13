@@ -28,6 +28,8 @@ namespace CodeAtlas.Traits.Mcp;
 [JsonSerializable(typeof(IReadOnlyList<UntaggedSymbolCandidate>))]
 [JsonSerializable(typeof(DuplicateBodyGroup))]
 [JsonSerializable(typeof(IReadOnlyList<DuplicateBodyGroup>))]
+[JsonSerializable(typeof(SubsystemDuplicateCluster))]
+[JsonSerializable(typeof(IReadOnlyList<SubsystemDuplicateCluster>))]
 [JsonSerializable(typeof(DuplicateSymbolLocation))]
 [JsonSerializable(typeof(SemanticSimilarityPair))]
 [JsonSerializable(typeof(IReadOnlyList<SemanticSimilarityPair>))]

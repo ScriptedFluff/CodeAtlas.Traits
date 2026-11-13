@@ -14,5 +14,8 @@ public sealed record TraitEntry
     public required IReadOnlyList<string> Tags { get; init; }
     public string TagSource { get; init; } = SourceAiDetailed;
     public byte[]? EmbeddingBlob { get; init; }
+    public string? Category { get; init; }
+    public bool IsActionableDebt { get; init; } = true;
+    public string? ClusterName { get; init; }
     public string? TaggedAtUtc { get; init; }
 }

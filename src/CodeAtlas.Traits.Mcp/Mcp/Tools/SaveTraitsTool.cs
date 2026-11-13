@@ -11,7 +11,10 @@ public sealed record TraitSubmissionItem(
     string BodyHash,
     string Summary,
     bool IsUtility,
-    IReadOnlyList<string> Tags);
+    IReadOnlyList<string> Tags,
+    string? Category = null,
+    bool IsActionableDebt = true,
+    string? ClusterName = null);
 
 public sealed record SaveTraitsResponse(
     string Status,
@@ -66,11 +69,14 @@ public sealed class SaveTraitsTool(
 
                 domainEntries.Add(new TraitEntry
                 {
-                    BodyHash  = item.BodyHash.Trim(),
-                    Summary   = item.Summary?.Trim() ?? string.Empty,
-                    IsUtility = item.IsUtility,
-                    Tags      = item.Tags ?? [],
-                    TagSource = TraitEntry.SourceAiDetailed
+                    BodyHash         = item.BodyHash.Trim(),
+                    Summary          = item.Summary?.Trim() ?? string.Empty,
+                    IsUtility        = item.IsUtility,
+                    Tags             = item.Tags ?? [],
+                    TagSource        = TraitEntry.SourceAiDetailed,
+                    Category         = string.IsNullOrWhiteSpace(item.Category) ? null : item.Category.Trim(),
+                    IsActionableDebt = item.IsActionableDebt,
+                    ClusterName      = string.IsNullOrWhiteSpace(item.ClusterName) ? null : item.ClusterName.Trim()
                 });
             }
         }
@@ -99,6 +105,9 @@ public sealed class SaveTraitsTool(
         [Description("Capability, behaviour, and technology tags (e.g. ['retry', 'backoff', 'jitter', 'polly']).")] IReadOnlyList<string> tags,
         [Description("Concise 1-sentence behavioural summary of what the symbol does.")] string summary,
         [Description("True if this symbol is a reusable utility, extension, or helper method/class.")] bool isUtility = false,
+        [Description("Optional: semantic classification category ('contract', 'boilerplate', 'subsystem_duplicate', 'divergent_clone', 'utility').")] string? category = null,
+        [Description("Optional: if false, marks this symbol/hash as intentional mirroring or boilerplate so future diff/duplicate audits suppress warnings (default true).")] bool isActionableDebt = true,
+        [Description("Optional: subsystem cluster name linking related classes or methods (e.g. 'GraphQlStubCluster').")] string? clusterName = null,
         [Description("Optional: target repository/workspace directory (defaults to active workspace).")] string? targetDirectory = null,
         CancellationToken ct = default)
     {
@@ -126,7 +135,7 @@ public sealed class SaveTraitsTool(
         using var db = new TraitsDb(workspace.TraitsDbPath);
         db.Migrate();
 
-        taggedSymbol = db.Traits.TagSymbolByTarget(target, tags ?? [], summary ?? string.Empty, isUtility, TraitEntry.SourceAiDetailed);
+        taggedSymbol = db.Traits.TagSymbolByTarget(target, tags ?? [], summary ?? string.Empty, isUtility, TraitEntry.SourceAiDetailed, category, isActionableDebt, clusterName);
         if (taggedSymbol is null)
         {
             await scanOrchestrator.EnsureScannedAsync(
@@ -135,7 +144,7 @@ public sealed class SaveTraitsTool(
                 forceRescan: true,
                 customDbDir: repoContext.CustomDbDir,
                 ct: ct);
-            taggedSymbol = db.Traits.TagSymbolByTarget(target, tags ?? [], summary ?? string.Empty, isUtility, TraitEntry.SourceAiDetailed);
+            taggedSymbol = db.Traits.TagSymbolByTarget(target, tags ?? [], summary ?? string.Empty, isUtility, TraitEntry.SourceAiDetailed, category, isActionableDebt, clusterName);
         }
 
         coverage = db.Traits.GetCoverageSummary(isScanInProgress: false);

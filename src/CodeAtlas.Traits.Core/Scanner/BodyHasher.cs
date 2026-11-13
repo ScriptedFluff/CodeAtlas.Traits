@@ -123,6 +123,8 @@ public static class BodyHasher
         string extractedContent;
         string normalisedForHash;
         string bodyHash;
+        bool hasExecutableBody;
+        int statementCount;
         bool isTrivial;
         string? qualifiedClassName;
 
@@ -146,26 +148,30 @@ public static class BodyHasher
 
         normalisedForHash  = extractedContent.NormaliseWhitespace();
         bodyHash           = normalisedForHash.ComputeContentHash();
-        isTrivial          = TrivialSymbolFilter.IsTrivialSymbol(symbol, extractedContent);
+        hasExecutableBody  = TrivialSymbolFilter.HasExecutableBody(symbol, extractedContent, fileSymbols);
+        statementCount     = TrivialSymbolFilter.EstimateStatementCount(symbol, extractedContent, hasExecutableBody);
+        isTrivial          = TrivialSymbolFilter.IsTrivialSymbol(symbol, extractedContent, hasExecutableBody);
         qualifiedClassName = ResolveQualifiedClassName(symbol, declaredNamespace, fileSymbols);
 
         // ── 3. Output / Return ──
         return new SymbolSnapshot
         {
-            SymbolName       = symbol.Name,
-            SymbolType       = symbol.Type,
-            ClassName        = qualifiedClassName,
-            Language         = symbol.Language ?? "unknown",
-            FilePath         = symbol.FilePath.NormaliseRelativePath(),
-            StartLine        = symbol.StartLine,
-            EndLine          = symbol.EndLine,
-            StartByte        = symbol.StartByte,
-            EndByte          = symbol.EndByte,
-            Signature        = symbol.Signature,
-            DocComment       = symbol.DocComment,
-            BodyHash         = bodyHash,
-            IsTrivial        = isTrivial,
-            ExtractedContent = extractedContent
+            SymbolName        = symbol.Name,
+            SymbolType        = symbol.Type,
+            ClassName         = qualifiedClassName,
+            Language          = symbol.Language ?? "unknown",
+            FilePath          = symbol.FilePath.NormaliseRelativePath(),
+            StartLine         = symbol.StartLine,
+            EndLine           = symbol.EndLine,
+            StartByte         = symbol.StartByte,
+            EndByte           = symbol.EndByte,
+            Signature         = symbol.Signature,
+            DocComment        = symbol.DocComment,
+            BodyHash          = bodyHash,
+            IsTrivial         = isTrivial,
+            HasExecutableBody = hasExecutableBody,
+            StatementCount    = statementCount,
+            ExtractedContent  = extractedContent
         };
     }
 
@@ -287,33 +293,40 @@ public static class BodyHasher
         // ── 1. Declarations ──
         string rawSlice;
         int braceIndex;
+        string sig;
 
-        // ── 2. Preconditions & Guard Clauses ──
-        if (!string.IsNullOrWhiteSpace(classSymbol.Signature))
-        {
-            return $"class {classSymbol.Name} : {classSymbol.Signature}".NormaliseWhitespace();
-        }
-
-        // ── 3. Intent-First Narrative ──
+        // ── 2. Intent-First Narrative ──
         rawSlice = fileBytes.SliceUtf8OrLines(
             classSymbol.StartByte,
             classSymbol.EndByte,
             classSymbol.StartLine,
             classSymbol.EndLine);
 
-        if (string.IsNullOrWhiteSpace(rawSlice))
+        if (!string.IsNullOrWhiteSpace(rawSlice))
         {
-            return $"class {classSymbol.Name}";
+            braceIndex = rawSlice.IndexOf('{');
+            if (braceIndex > 0)
+            {
+                return rawSlice[..braceIndex].NormaliseWhitespace();
+            }
+
+            return rawSlice.Split('\n')[0].NormaliseWhitespace();
         }
 
-        braceIndex = rawSlice.IndexOf('{');
-        if (braceIndex > 0)
+        if (!string.IsNullOrWhiteSpace(classSymbol.Signature))
         {
-            return rawSlice[..braceIndex].NormaliseWhitespace();
+            sig = classSymbol.Signature.NormaliseWhitespace();
+            if (sig.Contains("class ", StringComparison.OrdinalIgnoreCase) ||
+                sig.Contains(classSymbol.Name, StringComparison.Ordinal))
+            {
+                return sig;
+            }
+
+            return $"class {classSymbol.Name} : {sig}".NormaliseWhitespace();
         }
 
-        // ── 4. Output / Return ──
-        return rawSlice.Split('\n')[0].NormaliseWhitespace();
+        // ── 3. Output / Return ──
+        return $"class {classSymbol.Name}";
     }
 
     private static string ExtractMemberHeaderLine(AtlasSymbolDto member, string rawSlice)

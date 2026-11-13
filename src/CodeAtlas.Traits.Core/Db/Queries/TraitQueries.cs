@@ -239,7 +239,10 @@ public sealed class TraitQueries(SqliteConnection connection)
         IReadOnlyList<string> tags,
         string summary,
         bool isUtility,
-        string tagSource = TraitEntry.SourceAiDetailed)
+        string tagSource = TraitEntry.SourceAiDetailed,
+        string? category = null,
+        bool isActionableDebt = true,
+        string? clusterName = null)
     {
         // ── 1. Declarations ──
         SymbolSnapshot? snapshot;
@@ -264,12 +267,15 @@ public sealed class TraitQueries(SqliteConnection connection)
 
         entry = new TraitEntry
         {
-            BodyHash      = snapshot.BodyHash,
-            Summary       = summary?.Trim() ?? string.Empty,
-            IsUtility     = isUtility,
-            Tags          = tags ?? [],
-            TagSource     = string.IsNullOrWhiteSpace(tagSource) ? TraitEntry.SourceAiDetailed : tagSource,
-            EmbeddingBlob = embeddingBlob
+            BodyHash         = snapshot.BodyHash,
+            Summary          = summary?.Trim() ?? string.Empty,
+            IsUtility        = isUtility,
+            Tags             = tags ?? [],
+            TagSource        = string.IsNullOrWhiteSpace(tagSource) ? TraitEntry.SourceAiDetailed : tagSource,
+            EmbeddingBlob    = embeddingBlob,
+            Category         = string.IsNullOrWhiteSpace(category) ? null : category.Trim(),
+            IsActionableDebt = isActionableDebt,
+            ClusterName      = string.IsNullOrWhiteSpace(clusterName) ? null : clusterName.Trim()
         };
 
         SaveTraitEntries([entry]);
@@ -280,55 +286,85 @@ public sealed class TraitQueries(SqliteConnection connection)
 
     /// <summary>
     /// Finds non-trivial symbols across the codebase that share an identical <c>body_hash</c>.
+    /// By default, excludes non-executable contract signatures (<c>has_executable_body = 0</c>),
+    /// suppresses standalone 1-statement / 1-property noise unless part of a multi-symbol file-pair cluster,
+    /// and respects <c>.codeatlas/settings.json</c> ignore patterns.
     /// </summary>
-    public IReadOnlyList<DuplicateBodyGroup> FindExactBodyDuplicates(string? language = null, int limit = 50)
+    public IReadOnlyList<DuplicateBodyGroup> FindExactBodyDuplicates(
+        string? language = null,
+        int limit = 50,
+        bool includeContracts = false,
+        int minStatements = 2,
+        bool onlyActionableDebt = true,
+        string? workspaceRoot = null)
     {
         // ── 1. Declarations ──
-        string? normalisedLanguage;
-        List<(string BodyHash, int Count, string? Summary)> duplicateHashes;
-        List<DuplicateBodyGroup> groups;
+        List<DuplicateBodyGroup> rawGroups;
+        IReadOnlyList<SubsystemDuplicateCluster> clusters;
+        HashSet<string> clusteredHashes;
+        List<DuplicateBodyGroup> filteredGroups;
 
         // ── 2. Preconditions & Guard Clauses ──
-        normalisedLanguage = LanguageNormalizer.Normalise(language);
-        duplicateHashes    = [];
-        groups             = [];
+        rawGroups = QueryRawDuplicateBodyGroups(language, Math.Clamp(limit * 3, 50, 500), includeContracts, onlyActionableDebt, workspaceRoot);
+        if (rawGroups.Count == 0)
+        {
+            return [];
+        }
 
         // ── 3. Intent-First Narrative ──
-        using (var cmd = connection.CreateCommand())
-        {
-            cmd.CommandText = """
-                SELECT s.body_hash, COUNT(*) AS cnt, e.summary
-                FROM symbol_snapshots s
-                LEFT JOIN trait_entries e ON e.body_hash = s.body_hash
-                WHERE s.is_trivial = 0
-                  AND (@lang IS NULL OR s.language = @lang COLLATE NOCASE)
-                GROUP BY s.body_hash
-                HAVING COUNT(*) > 1
-                ORDER BY cnt DESC
-                LIMIT @limit;
-                """;
-            cmd.Parameters.AddWithValue("@lang", (object?)normalisedLanguage ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@limit", Math.Clamp(limit, 1, 200));
+        clusters        = BuildSubsystemClustersFromGroups(rawGroups);
+        clusteredHashes = clusters.SelectMany(c => c.BodyHashes).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        filteredGroups  = new List<DuplicateBodyGroup>(rawGroups.Count);
 
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+        foreach (var group in rawGroups)
+        {
+            var maxLineSpan = group.Locations.Count > 0
+                ? group.Locations.Max(l => Math.Max(1, l.EndLine - l.StartLine + 1))
+                : 1;
+
+            // Suppress standalone 1-statement / 1-property short boilerplate (<= 5 lines) unless it belongs to a multi-symbol subsystem cluster.
+            if (group.HasExecutableBody &&
+                minStatements > 1 &&
+                group.StatementCount < minStatements &&
+                maxLineSpan <= 5 &&
+                !clusteredHashes.Contains(group.BodyHash))
             {
-                duplicateHashes.Add((
-                    reader.GetString(0),
-                    reader.GetInt32(1),
-                    reader.IsDBNull(2) ? null : reader.GetString(2)));
+                continue;
+            }
+
+            filteredGroups.Add(group);
+            if (filteredGroups.Count >= Math.Clamp(limit, 1, 200))
+            {
+                break;
             }
         }
 
-        foreach (var (bodyHash, count, summary) in duplicateHashes)
-        {
-            var tags      = GetTagsForBodyHash(bodyHash);
-            var locations = GetLocationsForBodyHash(bodyHash);
-            groups.Add(new DuplicateBodyGroup(bodyHash, count, summary, tags, locations));
-        }
-
         // ── 4. Output / Return ──
-        return groups;
+        return filteredGroups;
+    }
+
+    /// <summary>
+    /// Detects file-pair / subsystem duplication clusters where multiple sibling symbols (<c>&gt;= 2</c>)
+    /// in one file share identical <c>body_hash</c> values with sibling symbols in another file
+    /// (e.g. copied GraphQL DTO/stub hierarchies or duplicated utility files).
+    /// </summary>
+    public IReadOnlyList<SubsystemDuplicateCluster> DetectSubsystemDuplicateClusters(
+        string? language = null,
+        bool includeContracts = false,
+        bool onlyActionableDebt = true,
+        string? workspaceRoot = null,
+        int limit = 50)
+    {
+        // ── 1. Declarations ──
+        List<DuplicateBodyGroup> rawGroups;
+        IReadOnlyList<SubsystemDuplicateCluster> clusters;
+
+        // ── 2. Intent-First Narrative ──
+        rawGroups = QueryRawDuplicateBodyGroups(language, 500, includeContracts, onlyActionableDebt, workspaceRoot);
+        clusters  = BuildSubsystemClustersFromGroups(rawGroups);
+
+        // ── 3. Output / Return ──
+        return clusters.Take(Math.Clamp(limit, 1, 100)).ToList();
     }
 
     /// <summary>
@@ -755,6 +791,11 @@ public sealed class TraitQueries(SqliteConnection connection)
 
         foreach (var diffSym in taggedInDiff)
         {
+            if (!diffSym.IsActionableDebt)
+            {
+                continue;
+            }
+
             var exactDups = GetLocationsForBodyHash(diffSym.BodyHash)
                 .Where(loc => !string.Equals(loc.FilePath, diffSym.FilePath, StringComparison.OrdinalIgnoreCase) ||
                               loc.StartLine != diffSym.StartLine)
@@ -968,11 +1009,11 @@ public sealed class TraitQueries(SqliteConnection connection)
             INSERT INTO symbol_snapshots
                 (symbol_name, symbol_type, class_name, language, file_path,
                  start_line, end_line, start_byte, end_byte, signature,
-                 doc_comment, body_hash, is_trivial, extracted_content)
+                 doc_comment, body_hash, is_trivial, has_executable_body, statement_count, extracted_content)
             VALUES
                 (@name, @type, @className, @lang, @filePath,
                  @startLine, @endLine, @startByte, @endByte, @sig,
-                 @doc, @hash, @trivial, @content);
+                 @doc, @hash, @trivial, @execBody, @stmtCount, @content);
             """;
 
         var pName      = insert.Parameters.Add("@name",      SqliteType.Text);
@@ -988,6 +1029,8 @@ public sealed class TraitQueries(SqliteConnection connection)
         var pDoc       = insert.Parameters.Add("@doc",       SqliteType.Text);
         var pHash      = insert.Parameters.Add("@hash",      SqliteType.Text);
         var pTrivial   = insert.Parameters.Add("@trivial",   SqliteType.Integer);
+        var pExecBody  = insert.Parameters.Add("@execBody",  SqliteType.Integer);
+        var pStmtCount = insert.Parameters.Add("@stmtCount", SqliteType.Integer);
         var pContent   = insert.Parameters.Add("@content",   SqliteType.Text);
 
         foreach (var s in snapshots)
@@ -1005,6 +1048,8 @@ public sealed class TraitQueries(SqliteConnection connection)
             pDoc.Value       = (object?)s.DocComment ?? DBNull.Value;
             pHash.Value      = s.BodyHash;
             pTrivial.Value   = s.IsTrivial ? 1 : 0;
+            pExecBody.Value  = s.HasExecutableBody ? 1 : 0;
+            pStmtCount.Value = s.StatementCount;
             pContent.Value   = (object?)s.ExtractedContent ?? DBNull.Value;
 
             insert.ExecuteNonQuery();
@@ -1035,20 +1080,28 @@ public sealed class TraitQueries(SqliteConnection connection)
         {
             upsertEntry.Transaction = tx;
             upsertEntry.CommandText = """
-                INSERT INTO trait_entries (body_hash, summary, is_utility, tag_source, embedding_blob, tagged_at_utc)
-                VALUES (@hash, @summary, @utility, @source, @embedding, @now)
+                INSERT INTO trait_entries
+                    (body_hash, summary, is_utility, tag_source, embedding_blob, category, is_actionable_debt, cluster_name, tagged_at_utc)
+                VALUES
+                    (@hash, @summary, @utility, @source, @embedding, @category, @actionable, @cluster, @now)
                 ON CONFLICT(body_hash) DO UPDATE SET
-                    summary        = excluded.summary,
-                    is_utility     = excluded.is_utility,
-                    tag_source     = excluded.tag_source,
-                    embedding_blob = COALESCE(excluded.embedding_blob, trait_entries.embedding_blob),
-                    tagged_at_utc  = excluded.tagged_at_utc;
+                    summary            = excluded.summary,
+                    is_utility         = excluded.is_utility,
+                    tag_source         = excluded.tag_source,
+                    embedding_blob     = COALESCE(excluded.embedding_blob, trait_entries.embedding_blob),
+                    category           = COALESCE(excluded.category, trait_entries.category),
+                    is_actionable_debt = excluded.is_actionable_debt,
+                    cluster_name       = COALESCE(excluded.cluster_name, trait_entries.cluster_name),
+                    tagged_at_utc      = excluded.tagged_at_utc;
                 """;
             upsertEntry.Parameters.AddWithValue("@hash", entry.BodyHash);
             upsertEntry.Parameters.AddWithValue("@summary", entry.Summary ?? string.Empty);
             upsertEntry.Parameters.AddWithValue("@utility", entry.IsUtility ? 1 : 0);
             upsertEntry.Parameters.AddWithValue("@source", effectiveSource);
             upsertEntry.Parameters.AddWithValue("@embedding", (object?)effectiveEmbedding ?? DBNull.Value);
+            upsertEntry.Parameters.AddWithValue("@category", (object?)entry.Category ?? DBNull.Value);
+            upsertEntry.Parameters.AddWithValue("@actionable", entry.IsActionableDebt ? 1 : 0);
+            upsertEntry.Parameters.AddWithValue("@cluster", (object?)entry.ClusterName ?? DBNull.Value);
             upsertEntry.Parameters.AddWithValue("@now", entry.TaggedAtUtc ?? nowUtc);
             upsertEntry.ExecuteNonQuery();
         }
@@ -1345,6 +1398,172 @@ public sealed class TraitQueries(SqliteConnection connection)
         return locations;
     }
 
+    private List<DuplicateBodyGroup> QueryRawDuplicateBodyGroups(
+        string? language,
+        int limit,
+        bool includeContracts,
+        bool onlyActionableDebt,
+        string? workspaceRoot)
+    {
+        // ── 1. Declarations ──
+        string? normalisedLanguage;
+        TraitsAppConfig config;
+        List<(string BodyHash, string? Summary, bool HasExecBody, int StmtCount, string? Category, bool Actionable, string? Cluster)> duplicateRows;
+        List<DuplicateBodyGroup> groups;
+
+        // ── 2. Preconditions & Guard Clauses ──
+        normalisedLanguage = LanguageNormalizer.Normalise(language);
+        config             = TraitsAppConfig.Load(workspaceRoot);
+        duplicateRows      = [];
+        groups             = [];
+
+        // ── 3. Intent-First Narrative ──
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = """
+                SELECT s.body_hash,
+                       e.summary,
+                       MAX(s.has_executable_body) AS has_exec,
+                       MAX(s.statement_count)     AS stmt_cnt,
+                       e.category,
+                       COALESCE(e.is_actionable_debt, 1) AS actionable,
+                       e.cluster_name
+                FROM symbol_snapshots s
+                LEFT JOIN trait_entries e ON e.body_hash = s.body_hash
+                WHERE s.is_trivial = 0
+                  AND (@includeContracts = 1 OR s.has_executable_body = 1)
+                  AND (@onlyActionable = 0 OR COALESCE(e.is_actionable_debt, 1) = 1)
+                  AND (@lang IS NULL OR s.language = @lang COLLATE NOCASE)
+                GROUP BY s.body_hash
+                HAVING COUNT(*) > 1
+                ORDER BY COUNT(*) DESC, stmt_cnt DESC
+                LIMIT @limit;
+                """;
+            cmd.Parameters.AddWithValue("@includeContracts", includeContracts ? 1 : 0);
+            cmd.Parameters.AddWithValue("@onlyActionable", onlyActionableDebt ? 1 : 0);
+            cmd.Parameters.AddWithValue("@lang", (object?)normalisedLanguage ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@limit", Math.Clamp(limit, 1, 500));
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                duplicateRows.Add((
+                    reader.GetString(0),
+                    reader.IsDBNull(1) ? null : reader.GetString(1),
+                    reader.IsDBNull(2) || reader.GetInt32(2) == 1,
+                    reader.IsDBNull(3) ? 1 : reader.GetInt32(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) || reader.GetInt32(5) == 1,
+                    reader.IsDBNull(6) ? null : reader.GetString(6)));
+            }
+        }
+
+        foreach (var row in duplicateRows)
+        {
+            var locations = GetLocationsForBodyHash(row.BodyHash)
+                .Where(loc => !config.IsPathIgnored(loc.FilePath))
+                .ToList();
+
+            if (locations.Count < 2)
+            {
+                continue;
+            }
+
+            var tags = GetTagsForBodyHash(row.BodyHash);
+            groups.Add(new DuplicateBodyGroup(
+                BodyHash:          row.BodyHash,
+                OccurrenceCount:   locations.Count,
+                Summary:           row.Summary,
+                Tags:              tags,
+                Locations:         locations,
+                HasExecutableBody: row.HasExecBody,
+                StatementCount:    row.StmtCount,
+                Category:          row.Category,
+                IsActionableDebt:  row.Actionable,
+                ClusterName:       row.Cluster));
+        }
+
+        // ── 4. Output / Return ──
+        return groups;
+    }
+
+    private static IReadOnlyList<SubsystemDuplicateCluster> BuildSubsystemClustersFromGroups(
+        IReadOnlyList<DuplicateBodyGroup> groups)
+    {
+        // ── 1. Declarations ──
+        Dictionary<(string FileA, string FileB), (HashSet<string> Symbols, HashSet<string> Hashes)> pairMap;
+        List<SubsystemDuplicateCluster> clusters;
+
+        // ── 2. Preconditions & Guard Clauses ──
+        if (groups.Count == 0)
+        {
+            return [];
+        }
+
+        // ── 3. Intent-First Narrative ──
+        pairMap  = new Dictionary<(string FileA, string FileB), (HashSet<string> Symbols, HashSet<string> Hashes)>();
+        clusters = [];
+
+        foreach (var group in groups)
+        {
+            var distinctFiles = group.Locations
+                .Select(l => l.FilePath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            for (var i = 0; i < distinctFiles.Count; i++)
+            {
+                for (var j = i + 1; j < distinctFiles.Count; j++)
+                {
+                    var key = (distinctFiles[i], distinctFiles[j]);
+                    if (!pairMap.TryGetValue(key, out var bucket))
+                    {
+                        bucket = (
+                            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                            new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+                        pairMap[key] = bucket;
+                    }
+
+                    foreach (var loc in group.Locations.Where(l =>
+                        string.Equals(l.FilePath, key.Item1, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(l.FilePath, key.Item2, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        bucket.Symbols.Add(loc.SymbolName);
+                    }
+
+                    bucket.Hashes.Add(group.BodyHash);
+                }
+            }
+        }
+
+        foreach (var (pair, bucket) in pairMap)
+        {
+            if (bucket.Hashes.Count < 2)
+            {
+                continue;
+            }
+
+            var sortedSymbols = bucket.Symbols.OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList();
+            var sortedHashes  = bucket.Hashes.OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
+            var summary       = $"Subsystem Duplication: {pair.FileA} <-> {pair.FileB} ({sortedHashes.Count} identical types/methods: {string.Join(", ", sortedSymbols)})";
+
+            clusters.Add(new SubsystemDuplicateCluster(
+                PrimaryFilePath:      pair.FileA,
+                SecondaryFilePath:    pair.FileB,
+                IdenticalSymbolCount: sortedHashes.Count,
+                SymbolNames:          sortedSymbols,
+                BodyHashes:           sortedHashes,
+                Summary:              summary));
+        }
+
+        // ── 4. Output / Return ──
+        return clusters
+            .OrderByDescending(c => c.IdenticalSymbolCount)
+            .ThenBy(c => c.PrimaryFilePath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     private TraitSearchMatch? GetSymbolTraitMatchById(long snapshotId)
     {
         // ── 1. Declarations ──
@@ -1356,7 +1575,8 @@ public sealed class TraitQueries(SqliteConnection connection)
         cmd.CommandText = """
             SELECT s.symbol_name, s.symbol_type, s.class_name, s.language,
                    s.file_path, s.start_line, s.end_line, s.signature,
-                   s.body_hash, e.summary, e.is_utility, e.tag_source
+                   s.body_hash, e.summary, e.is_utility, e.tag_source,
+                   e.category, COALESCE(e.is_actionable_debt, 1), e.cluster_name
             FROM symbol_snapshots s
             JOIN trait_entries e ON e.body_hash = s.body_hash
             WHERE s.id = @id;
@@ -1371,19 +1591,22 @@ public sealed class TraitQueries(SqliteConnection connection)
 
         bodyHash = reader.GetString(8);
         match = new TraitSearchMatch(
-            SymbolName: reader.GetString(0),
-            SymbolType: reader.GetString(1),
-            ClassName:  reader.IsDBNull(2) ? null : reader.GetString(2),
-            Language:   reader.GetString(3),
-            FilePath:   reader.GetString(4),
-            StartLine:  reader.GetInt32(5),
-            EndLine:    reader.GetInt32(6),
-            Signature:  reader.IsDBNull(7) ? null : reader.GetString(7),
-            BodyHash:   bodyHash,
-            Summary:    reader.GetString(9),
-            IsUtility:  reader.GetInt32(10) == 1,
-            Tags:       [],
-            TagSource:  reader.IsDBNull(11) ? TraitEntry.SourceAiDetailed : reader.GetString(11));
+            SymbolName:       reader.GetString(0),
+            SymbolType:       reader.GetString(1),
+            ClassName:        reader.IsDBNull(2) ? null : reader.GetString(2),
+            Language:         reader.GetString(3),
+            FilePath:         reader.GetString(4),
+            StartLine:        reader.GetInt32(5),
+            EndLine:          reader.GetInt32(6),
+            Signature:        reader.IsDBNull(7) ? null : reader.GetString(7),
+            BodyHash:         bodyHash,
+            Summary:          reader.GetString(9),
+            IsUtility:        reader.GetInt32(10) == 1,
+            Tags:             [],
+            TagSource:        reader.IsDBNull(11) ? TraitEntry.SourceAiDetailed : reader.GetString(11),
+            Category:         reader.IsDBNull(12) ? null : reader.GetString(12),
+            IsActionableDebt: reader.IsDBNull(13) || reader.GetInt32(13) == 1,
+            ClusterName:      reader.IsDBNull(14) ? null : reader.GetString(14));
 
         reader.Close();
 
@@ -1505,7 +1728,8 @@ public sealed class TraitQueries(SqliteConnection connection)
             cmd.CommandText = """
                 SELECT s.symbol_name, s.symbol_type, s.class_name, s.language,
                        s.file_path, s.start_line, s.end_line, s.signature,
-                       s.body_hash, e.summary, e.is_utility
+                       s.body_hash, e.summary, e.is_utility, e.tag_source,
+                       e.category, COALESCE(e.is_actionable_debt, 1), e.cluster_name
                 FROM symbol_snapshots s
                 JOIN trait_entries e ON e.body_hash = s.body_hash
                 WHERE s.is_trivial = 0
@@ -1522,18 +1746,22 @@ public sealed class TraitQueries(SqliteConnection connection)
                 }
 
                 rawList.Add(new TraitSearchMatch(
-                    SymbolName: reader.GetString(0),
-                    SymbolType: reader.GetString(1),
-                    ClassName:  reader.IsDBNull(2) ? null : reader.GetString(2),
-                    Language:   reader.GetString(3),
-                    FilePath:   filePath,
-                    StartLine:  reader.GetInt32(5),
-                    EndLine:    reader.GetInt32(6),
-                    Signature:  reader.IsDBNull(7) ? null : reader.GetString(7),
-                    BodyHash:   reader.GetString(8),
-                    Summary:    reader.GetString(9),
-                    IsUtility:  reader.GetInt32(10) == 1,
-                    Tags:       []));
+                    SymbolName:       reader.GetString(0),
+                    SymbolType:       reader.GetString(1),
+                    ClassName:        reader.IsDBNull(2) ? null : reader.GetString(2),
+                    Language:         reader.GetString(3),
+                    FilePath:         filePath,
+                    StartLine:        reader.GetInt32(5),
+                    EndLine:          reader.GetInt32(6),
+                    Signature:        reader.IsDBNull(7) ? null : reader.GetString(7),
+                    BodyHash:         reader.GetString(8),
+                    Summary:          reader.GetString(9),
+                    IsUtility:        reader.GetInt32(10) == 1,
+                    Tags:             [],
+                    TagSource:        reader.IsDBNull(11) ? TraitEntry.SourceAiDetailed : reader.GetString(11),
+                    Category:         reader.IsDBNull(12) ? null : reader.GetString(12),
+                    IsActionableDebt: reader.IsDBNull(13) || reader.GetInt32(13) == 1,
+                    ClusterName:      reader.IsDBNull(14) ? null : reader.GetString(14)));
             }
         }
 
@@ -1725,21 +1953,23 @@ public sealed class TraitQueries(SqliteConnection connection)
     {
         return new SymbolSnapshot
         {
-            Id               = reader.GetInt64(0),
-            SymbolName       = reader.GetString(1),
-            SymbolType       = reader.GetString(2),
-            ClassName        = reader.IsDBNull(3) ? null : reader.GetString(3),
-            Language         = reader.GetString(4),
-            FilePath         = reader.GetString(5),
-            StartLine        = reader.GetInt32(6),
-            EndLine          = reader.GetInt32(7),
-            StartByte        = reader.GetInt32(8),
-            EndByte          = reader.GetInt32(9),
-            Signature        = reader.IsDBNull(10) ? null : reader.GetString(10),
-            DocComment       = reader.IsDBNull(11) ? null : reader.GetString(11),
-            BodyHash         = reader.GetString(12),
-            IsTrivial        = reader.GetInt32(13) == 1,
-            ExtractedContent = reader.IsDBNull(14) ? null : reader.GetString(14)
+            Id                = reader.GetInt64(0),
+            SymbolName        = reader.GetString(1),
+            SymbolType        = reader.GetString(2),
+            ClassName         = reader.IsDBNull(3) ? null : reader.GetString(3),
+            Language          = reader.GetString(4),
+            FilePath          = reader.GetString(5),
+            StartLine         = reader.GetInt32(6),
+            EndLine           = reader.GetInt32(7),
+            StartByte         = reader.GetInt32(8),
+            EndByte           = reader.GetInt32(9),
+            Signature         = reader.IsDBNull(10) ? null : reader.GetString(10),
+            DocComment        = reader.IsDBNull(11) ? null : reader.GetString(11),
+            BodyHash          = reader.GetString(12),
+            IsTrivial         = reader.GetInt32(13) == 1,
+            ExtractedContent  = reader.IsDBNull(14) ? null : reader.GetString(14),
+            HasExecutableBody = reader.FieldCount <= 15 || reader.IsDBNull(15) || reader.GetInt32(15) == 1,
+            StatementCount    = reader.FieldCount <= 16 || reader.IsDBNull(16) ? 1 : reader.GetInt32(16)
         };
     }
 
@@ -1805,7 +2035,8 @@ public sealed class TraitQueries(SqliteConnection connection)
         cmd.CommandText = """
             SELECT s.id, s.symbol_name, s.symbol_type, s.class_name, s.language,
                    s.file_path, s.start_line, s.end_line, s.start_byte, s.end_byte,
-                   s.signature, s.doc_comment, s.body_hash, s.is_trivial, s.extracted_content
+                   s.signature, s.doc_comment, s.body_hash, s.is_trivial, s.extracted_content,
+                   s.has_executable_body, s.statement_count
             FROM symbol_snapshots s
             LEFT JOIN trait_entries e ON e.body_hash = s.body_hash
             WHERE s.is_trivial = 0

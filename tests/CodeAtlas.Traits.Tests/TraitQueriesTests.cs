@@ -709,4 +709,210 @@ public sealed class TraitQueriesTests : IDisposable
         Assert.True(simCsvPair > 0.60, $"Expected high semantic cosine similarity for CSV methods, got {simCsvPair:F2}");
         Assert.True(simCsvPair > simUnrelatedPair + 0.30);
     }
+
+    [Fact]
+    public void Iteration2_ContractSeparationClusterDetectionAndConfigIgnoreFiltering_WorksEndToEnd()
+    {
+        // ── 1. Declarations ──
+        IReadOnlyList<SymbolSnapshot> snapshots;
+        IReadOnlyList<DuplicateBodyGroup> defaultDuplicates;
+        IReadOnlyList<DuplicateBodyGroup> withContractsDuplicates;
+        IReadOnlyList<SubsystemDuplicateCluster> clusters;
+        string settingsDir;
+
+        // ── 2. Intent-First Narrative ──
+        settingsDir = Path.Combine(_tempDir, ".codeatlas");
+        Directory.CreateDirectory(settingsDir);
+        File.WriteAllText(
+            Path.Combine(settingsDir, "settings.json"),
+            """{ "ignorePatterns": ["**/*Tests/**/*"] }""");
+
+        snapshots =
+        [
+            // 1. Interface contract signature (HasExecutableBody = false)
+            new SymbolSnapshot
+            {
+                SymbolName        = "CancelJob",
+                SymbolType        = "Method",
+                ClassName         = "IJobClient",
+                Language          = "csharp",
+                FilePath          = "Clever.Adviser.Jobs/Client/IJobClient.cs",
+                StartLine         = 81,
+                EndLine           = 81,
+                StartByte         = 100,
+                EndByte           = 140,
+                BodyHash          = "hash_cancel_job_contract",
+                IsTrivial         = false,
+                HasExecutableBody = false,
+                StatementCount    = 0
+            },
+            new SymbolSnapshot
+            {
+                SymbolName        = "CancelJob",
+                SymbolType        = "Method",
+                ClassName         = "IJobManager",
+                Language          = "csharp",
+                FilePath          = "Clever.Adviser.Jobs/Manager/IJobManager.cs",
+                StartLine         = 36,
+                EndLine           = 36,
+                StartByte         = 100,
+                EndByte           = 140,
+                BodyHash          = "hash_cancel_job_contract",
+                IsTrivial         = false,
+                HasExecutableBody = false,
+                StatementCount    = 0
+            },
+            // 2. Subsystem cluster: 2 sibling stub classes duplicated between PerformanceQuery and ReportQuery
+            new SymbolSnapshot
+            {
+                SymbolName        = "RunResultStub",
+                SymbolType        = "Class",
+                Language          = "csharp",
+                FilePath          = "Clever.Adviser.Model/GraphQLModels/PerformanceQuery/GraphQlResponseStub.cs",
+                StartLine         = 8,
+                EndLine           = 11,
+                StartByte         = 50,
+                EndByte           = 120,
+                BodyHash          = "hash_run_result_stub",
+                IsTrivial         = false,
+                HasExecutableBody = true,
+                StatementCount    = 1
+            },
+            new SymbolSnapshot
+            {
+                SymbolName        = "RunResultStub",
+                SymbolType        = "Class",
+                Language          = "csharp",
+                FilePath          = "Clever.Adviser.Model/GraphQLModels/ReportQuery/ReportQuery.cs",
+                StartLine         = 9,
+                EndLine           = 12,
+                StartByte         = 50,
+                EndByte           = 120,
+                BodyHash          = "hash_run_result_stub",
+                IsTrivial         = false,
+                HasExecutableBody = true,
+                StatementCount    = 1
+            },
+            new SymbolSnapshot
+            {
+                SymbolName        = "RollingAnalysisStub",
+                SymbolType        = "Class",
+                Language          = "csharp",
+                FilePath          = "Clever.Adviser.Model/GraphQLModels/PerformanceQuery/GraphQlResponseStub.cs",
+                StartLine         = 42,
+                EndLine           = 49,
+                StartByte         = 200,
+                EndByte           = 400,
+                BodyHash          = "hash_rolling_analysis_stub",
+                IsTrivial         = false,
+                HasExecutableBody = true,
+                StatementCount    = 4
+            },
+            new SymbolSnapshot
+            {
+                SymbolName        = "RollingAnalysisStub",
+                SymbolType        = "Class",
+                Language          = "csharp",
+                FilePath          = "Clever.Adviser.Model/GraphQLModels/ReportQuery/ReportQuery.cs",
+                StartLine         = 40,
+                EndLine           = 47,
+                StartByte         = 200,
+                EndByte           = 400,
+                BodyHash          = "hash_rolling_analysis_stub",
+                IsTrivial         = false,
+                HasExecutableBody = true,
+                StatementCount    = 4
+            },
+            // 3. Test method in ignored **/*Tests/**/* path
+            new SymbolSnapshot
+            {
+                SymbolName        = "TestInit",
+                SymbolType        = "Method",
+                Language          = "csharp",
+                FilePath          = "Clever.Adviser.Tests/Web/Auth/PartnerAccessHandlerTests.cs",
+                StartLine         = 20,
+                EndLine           = 30,
+                StartByte         = 100,
+                EndByte           = 300,
+                BodyHash          = "hash_test_init",
+                IsTrivial         = false,
+                HasExecutableBody = true,
+                StatementCount    = 3
+            },
+            new SymbolSnapshot
+            {
+                SymbolName        = "TestInit",
+                SymbolType        = "Method",
+                Language          = "csharp",
+                FilePath          = "Clever.Adviser.Tests/Web/Auth/RestrictedModeHandlerTests.cs",
+                StartLine         = 21,
+                EndLine           = 31,
+                StartByte         = 100,
+                EndByte           = 300,
+                BodyHash          = "hash_test_init",
+                IsTrivial         = false,
+                HasExecutableBody = true,
+                StatementCount    = 3
+            }
+        ];
+
+        _db.Traits.ReplaceSymbolSnapshots(snapshots);
+
+        defaultDuplicates       = _db.Traits.FindExactBodyDuplicates("csharp", limit: 50, includeContracts: false, minStatements: 2, onlyActionableDebt: true, workspaceRoot: _tempDir);
+        withContractsDuplicates = _db.Traits.FindExactBodyDuplicates("csharp", limit: 50, includeContracts: true, minStatements: 2, onlyActionableDebt: true, workspaceRoot: _tempDir);
+        clusters                = _db.Traits.DetectSubsystemDuplicateClusters("csharp", includeContracts: false, onlyActionableDebt: true, workspaceRoot: _tempDir);
+
+        // ── 3. Output / Assertions ──
+        // Interface contract (CancelJob) and ignored test path (TestInit) are excluded by default;
+        // both stub classes in the GraphQlResponseStub.cs <-> ReportQuery.cs cluster are kept!
+        Assert.Equal(2, defaultDuplicates.Count);
+        Assert.DoesNotContain(defaultDuplicates, d => d.BodyHash == "hash_cancel_job_contract");
+        Assert.DoesNotContain(defaultDuplicates, d => d.BodyHash == "hash_test_init");
+        Assert.Equal(3, withContractsDuplicates.Count);
+
+        Assert.Single(clusters);
+        Assert.Equal(2, clusters[0].IdenticalSymbolCount);
+        Assert.Contains("RunResultStub", clusters[0].SymbolNames);
+        Assert.Contains("RollingAnalysisStub", clusters[0].SymbolNames);
+    }
+
+    [Fact]
+    public void ZeroCostStructuralTraits_SeedsHighSignalMultiWordTraitsWithoutNoisySingleWords()
+    {
+        // ── 1. Declarations ──
+        SymbolSnapshot snapshot;
+        ThesaurusEngine thesaurus;
+        TraitEntry generated;
+
+        // ── 2. Intent-First Narrative ──
+        thesaurus = ThesaurusEngine.LoadForWorkspace(_tempDir);
+        snapshot  = new SymbolSnapshot
+        {
+            SymbolName       = "GetOrSetHashEntryAsync",
+            SymbolType       = "Method",
+            ClassName        = "RedisExtensions",
+            Language         = "csharp",
+            FilePath         = "Clever.Adviser.Services/Extensions.cs",
+            StartLine        = 21,
+            EndLine          = 31,
+            StartByte        = 100,
+            EndByte          = 450,
+            Signature        = "public static async Task<T> GetOrSetHashEntryAsync<T>(this IRedisCacheActions redis, string key, CancellationToken ct)",
+            BodyHash         = "hash_redis_ext",
+            IsTrivial        = false,
+            ExtractedContent = "public static async Task<T> GetOrSetHashEntryAsync<T>(this IRedisCacheActions redis, string key, CancellationToken ct) { return await retryService.RetryAsync(ct); }"
+        };
+
+        generated = CodeAtlas.Traits.Core.Scanner.AutoTraitTagger.GenerateTraitsForSnapshot(
+            snapshot,
+            thesaurus,
+            new HashSet<string>());
+
+        // ── 3. Output / Assertions ──
+        Assert.Contains("extension_method", generated.Tags);
+        Assert.Contains("cancellable_async", generated.Tags);
+        Assert.Contains("accesses_redis", generated.Tags);
+        Assert.Contains("has_retry_logic", generated.Tags);
+        Assert.DoesNotContain("string", generated.Tags);
+    }
 }

@@ -38,6 +38,9 @@ public static class AutoTraitTagger
         extractedTags      = [];
         seenTags           = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        // Tier A: Zero-cost deterministic structural/idiom trait seeding (multi-word high-precision traits only).
+        ExtractZeroCostStructuralTraits(snapshot, extractedTags, seenTags);
+
 #if ENABLE_CPU_AUTO_TAGS
         // CPU keyword/thesaurus auto-tagging is disabled by default so 'auto-cpu' only indexes ONNX semantic embeddings
         // and leaves behavioural trait tagging to Gemini/Copilot ('ai').
@@ -128,5 +131,82 @@ public static class AutoTraitTagger
 
         var tagDesc = tags.Count > 0 ? string.Join(", ", tags.Take(5)) : "ONNX semantic vector indexed";
         return $"Auto-indexed {snapshot.SymbolType.ToLowerInvariant()} '{snapshot.SymbolName}' ({tagDesc}).";
+    }
+
+    private static void ExtractZeroCostStructuralTraits(
+        SymbolSnapshot snapshot,
+        List<string> extractedTags,
+        HashSet<string> seenTags)
+    {
+        // ── 1. Declarations ──
+        string content;
+        string signature;
+
+        // ── 2. Preconditions & Guard Clauses ──
+        content   = snapshot.ExtractedContent ?? string.Empty;
+        signature = snapshot.Signature ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(content) && string.IsNullOrWhiteSpace(signature))
+        {
+            return;
+        }
+
+        // ── 3. Intent-First Narrative ──
+        if (IsExtensionMethod(content, signature))
+        {
+            AddTagIfNew("extension_method", extractedTags, seenTags);
+        }
+
+        if (ContainsAny(content, signature, "CancellationToken"))
+        {
+            AddTagIfNew("cancellable_async", extractedTags, seenTags);
+        }
+
+        if (ContainsAny(content, signature, "BeginTransaction", "BeginTransactionAsync", "TransactionScope", "IDbContextTransaction"))
+        {
+            AddTagIfNew("database_transaction", extractedTags, seenTags);
+        }
+
+        if (ContainsAny(content, signature, "sp_getapplock", "AcquireAppLock", "ReleaseAppLock", "AppLock"))
+        {
+            AddTagIfNew("uses_applock", extractedTags, seenTags);
+        }
+
+        if (ContainsAny(content, signature, "IRetryService", "RetryAsync", "RetryWithBackoff", "RetryPolicy", "AsyncRetryPolicy"))
+        {
+            AddTagIfNew("has_retry_logic", extractedTags, seenTags);
+        }
+
+        if (ContainsAny(content, signature, "IRedisCacheActions", "IRedisClientsManager", "GetOrSetHashEntryAsync", "GetHashEntryAsync", "SetHashEntryAsync"))
+        {
+            AddTagIfNew("accesses_redis", extractedTags, seenTags);
+        }
+    }
+
+    private static bool IsExtensionMethod(string content, string signature)
+    {
+        return (content.Contains("static ", StringComparison.Ordinal) || signature.Contains("static ", StringComparison.Ordinal)) &&
+               (content.Contains("(this ", StringComparison.Ordinal) || signature.Contains("(this ", StringComparison.Ordinal));
+    }
+
+    private static bool ContainsAny(string content, string signature, params string[] needles)
+    {
+        foreach (var needle in needles)
+        {
+            if (content.Contains(needle, StringComparison.OrdinalIgnoreCase) ||
+                signature.Contains(needle, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void AddTagIfNew(string tag, List<string> extractedTags, HashSet<string> seenTags)
+    {
+        if (seenTags.Add(tag))
+        {
+            extractedTags.Add(tag);
+        }
     }
 }

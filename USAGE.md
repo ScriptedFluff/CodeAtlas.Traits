@@ -96,10 +96,14 @@ CodeAtlas.Traits untagged --lang csharp --limit 25
 CodeAtlas.Traits untagged --lang csharp --json
 ```
 
-### 2.6 Find Exact Structural Duplicates (`duplicates`)
-Finds non-trivial methods, functions, or class skeletons across the repository that share the exact same whitespace-normalised `body_hash` (including `private` helper methods):
+### 2.6 Find Exact Structural Duplicates & Subsystem Clusters (`duplicates`)
+Finds non-trivial methods, functions, or class skeletons across the repository that share the exact same whitespace-normalised `body_hash` (including `private` helper methods), and automatically rolls up sibling file-pair collisions into **Subsystem Duplication Clusters**:
+- By default, interface/abstract contract declarations without executable bodies (`has_executable_body = 0`) are excluded (pass `--include-contracts` to inspect contract signature duplicates).
+- Standalone 1-statement / 1-property short boilerplate (`<= 5` lines) is suppressed unless it belongs to a multi-symbol Subsystem Cluster (customisable via `--min-statements`).
+- Respects `.codeatlas/settings.json` `ignorePatterns` (e.g. `"**/*Tests/**/*"`).
 ```powershell
-CodeAtlas.Traits duplicates --lang csharp
+CodeAtlas.Traits duplicates --lang csharp -r D:\Projects\MyRepo
+CodeAtlas.Traits duplicates --lang csharp --include-contracts --min-statements 1
 CodeAtlas.Traits duplicates --json
 ```
 
