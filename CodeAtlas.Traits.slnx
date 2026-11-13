@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CodeAtlas.Traits.Abstractions/CodeAtlas.Traits.Abstractions.csproj" />
+    <Project Path="src/CodeAtlas.Traits.Core/CodeAtlas.Traits.Core.csproj" />
+    <Project Path="src/CodeAtlas.Traits.Mcp/CodeAtlas.Traits.Mcp.csproj" />
+    <Project Path="src/CodeAtlas.Traits.Cli/CodeAtlas.Traits.Cli.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CodeAtlas.Traits.Tests/CodeAtlas.Traits.Tests.csproj" />
+  </Folder>
+</Solution>
