@@ -8,6 +8,8 @@
     <Authors>Garry Flanagan</Authors>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <!-- Uncomment ENABLE_CPU_AUTO_TAGS (or pass -p:DefineConstants=ENABLE_CPU_AUTO_TAGS) to re-enable CPU keyword/thesaurus auto-tagging during scan -->
+    <!-- <DefineConstants>$(DefineConstants);ENABLE_CPU_AUTO_TAGS</DefineConstants> -->
   </PropertyGroup>
 
   <ItemGroup>

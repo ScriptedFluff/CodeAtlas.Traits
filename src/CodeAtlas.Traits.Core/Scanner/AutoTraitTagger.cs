@@ -25,7 +25,6 @@ public static class AutoTraitTagger
     {
         // ── 1. Declarations ──
         string combinedSourceText;
-        IReadOnlyList<string> rawTokens;
         List<string> extractedTags;
         HashSet<string> seenTags;
         bool isUtility;
@@ -36,7 +35,7 @@ public static class AutoTraitTagger
 
         // ── 2. Intent-First Narrative ──
         combinedSourceText = $"{snapshot.SymbolName} {snapshot.Signature} {snapshot.DocComment} {snapshot.ExtractedContent}";
-        rawTokens          = combinedSourceText.ExtractCodeWordTokens();
+        var rawTokens      = combinedSourceText.ExtractCodeWordTokens();
         extractedTags      = [];
         seenTags           = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -121,7 +120,7 @@ public static class AutoTraitTagger
             return snapshot.DocComment.NormaliseWhitespace();
         }
 
-        var tagDesc = tags.Count > 0 ? string.Join(", ", tags.Take(5)) : "general logic";
-        return $"Auto-tagged {snapshot.SymbolType.ToLowerInvariant()} '{snapshot.SymbolName}' ({tagDesc}).";
+        var tagDesc = tags.Count > 0 ? string.Join(", ", tags.Take(5)) : "ONNX semantic vector indexed";
+        return $"Auto-indexed {snapshot.SymbolType.ToLowerInvariant()} '{snapshot.SymbolName}' ({tagDesc}).";
     }
 }
