@@ -30,7 +30,7 @@ public sealed class SaveTraitsTool(
     RepoContext repoContext,
     ScanOrchestrator scanOrchestrator)
 {
-    [McpServerTool]
+    [McpServerTool(Name = "save_traits")]
     [Description("""
         Saves detailed AI capability and technology tags, a concise 1-sentence behavioural summary, and an isUtility flag for a batch of symbols keyed by their content-addressable body_hash.
         Once saved, traits survive full CodeAtlas re-indexes and file moves automatically.
@@ -89,7 +89,7 @@ public sealed class SaveTraitsTool(
             Message:           $"Saved {savedCount} detailed AI trait entry/entries into traits.db. {coverage.Notice}");
     }
 
-    [McpServerTool]
+    [McpServerTool(Name = "tag_symbol")]
     [Description("""
         Directly inserts or upgrades detailed AI traits (tags, 1-sentence summary, and isUtility flag) for a specific method or class by its symbol reference ('MyNamespace.MyClass:MyMethod' or 'MyClass:MyMethod') or location ('MyClass.cs:L35') without needing to look up its body_hash first.
         Ideal for Gemini, GitHub Copilot, or Claude to tag methods as they write or review them.

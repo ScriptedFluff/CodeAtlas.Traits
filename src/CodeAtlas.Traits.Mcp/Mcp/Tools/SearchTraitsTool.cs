@@ -28,7 +28,7 @@ public sealed class SearchTraitsTool(
     RepoContext repoContext,
     ScanOrchestrator scanOrchestrator)
 {
-    [McpServerTool]
+    [McpServerTool(Name = "search_traits")]
     [Description("""
         Searches the CodeAtlas.Traits capability and technology index for classes, methods, and functions matching capability/behaviour tags (e.g. 'retry', 'polly', 'linq', 'compare', 'string', 'csv').
         Language names passed in tags (such as 'c#', 'csharp', 'typescript', 'powershell') automatically filter out non-matching language files via CodeAtlas.
@@ -58,9 +58,9 @@ public sealed class SearchTraitsTool(
         TraitsCoverageSummary coverage;
 
         // ── 2. Preconditions & Guard Clauses ──
-        effectiveRepo                    = ResolveTargetDirectory(targetDirectory, repoContext);
-        workspace                        = WorkspacePathResolver.ResolveWorkspace(effectiveRepo, repoContext.CustomDbDir);
-        parsedTagArray                   = ParseTagList(tags);
+        effectiveRepo                      = ResolveTargetDirectory(targetDirectory, repoContext);
+        workspace                          = WorkspacePathResolver.ResolveWorkspace(effectiveRepo, repoContext.CustomDbDir);
+        parsedTagArray                     = ParseTagList(tags);
         (resolvedLanguage, capabilityTags) = LanguageNormalizer.SplitTagsAndLanguage(parsedTagArray, language);
 
         // ── 3. Intent-First Narrative ──
@@ -100,7 +100,7 @@ public sealed class SearchTraitsTool(
             Matches:      matches);
     }
 
-    [McpServerTool]
+    [McpServerTool(Name = "get_top_tags")]
     [Description("""
         Returns the most frequently used capability and technology tags (and recurring multi-trait combinations) across non-trivial symbols in the repository.
         Useful for discovering what capabilities, domain concepts, and libraries exist in the codebase, or spotting multi-trait capability duplication where multiple distinct bodies share the same combination of 3+ traits.

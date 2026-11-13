@@ -25,7 +25,7 @@ public sealed class GetUntaggedBatchTool(
     RepoContext repoContext,
     ScanOrchestrator scanOrchestrator)
 {
-    [McpServerTool]
+    [McpServerTool(Name = "get_untagged_batch")]
     [Description("""
         Retrieves a batch of untagged (or baseline CPU auto-tagged) non-trivial classes, methods, and functions (deduplicated by content-addressable body_hash) that need detailed AI capability and technology tags.
         Classes are presented as compact contract skeletons (inheritance, constructors, and non-private method signatures only).
@@ -88,7 +88,7 @@ public sealed class GetUntaggedBatchTool(
             Candidates:   candidates);
     }
 
-    [McpServerTool]
+    [McpServerTool(Name = "get_symbol_for_analysis")]
     [Description("""
         Retrieves the source body, signature, body_hash, and current traits of a specific symbol ('MyNamespace.MyClass:MyMethod', 'MyClass:MyMethod', or 'MyClass.cs:L35') so Gemini or GitHub Copilot can analyse it and insert detailed traits via 'tag_symbol' or 'save_traits'.
         """)]

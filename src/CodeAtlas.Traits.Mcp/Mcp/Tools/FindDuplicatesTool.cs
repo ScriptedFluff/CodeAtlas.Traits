@@ -32,7 +32,7 @@ public sealed class FindDuplicatesTool(
     RepoContext repoContext,
     ScanOrchestrator scanOrchestrator)
 {
-    [McpServerTool]
+    [McpServerTool(Name = "find_duplicate_bodies")]
     [Description("""
         Detects exact duplicate non-trivial methods, functions, or class skeletons across the codebase that share the same whitespace-normalised body_hash.
         Ideal for post-implementation code review and cleanup to spot duplicated private helpers that should be consolidated into shared extensions or services.
@@ -87,7 +87,7 @@ public sealed class FindDuplicatesTool(
             DuplicateGroups: duplicateGroups);
     }
 
-    [McpServerTool]
+    [McpServerTool(Name = "find_similar_traits")]
     [Description("""
         Finds semantic near-duplicate classes, methods, or functions that have DIFFERENT implementations (different body_hash) yet share multiple overlapping capability and technology tags (e.g. two different retry loops or two different CSV escaping methods).
         """)]
@@ -142,7 +142,7 @@ public sealed class FindDuplicatesTool(
             SimilarPairs: similarPairs);
     }
 
-    [McpServerTool]
+    [McpServerTool(Name = "find_similar_to_location")]
     [Description("""
         Finds symbols in the repository that are similar in size and capability/synonym traits to a target symbol (e.g. 'MyNamespace.MyClass:MyMethod' or 'MyClass:MyMethod') or file:line location ('MyClass.cs:L35').
         Automatically checks if the repository and target symbol have been scanned and tagged; if not, scans and auto-tags them before computing similarity.

@@ -186,13 +186,17 @@ public static class CodeAtlasLocator
                 var siblingRepo = Path.Combine(current.FullName, "CodeAtlas");
                 if (Directory.Exists(siblingRepo))
                 {
-                    var debugExe   = Path.Combine(siblingRepo, "src", "CodeAtlas.Cli", "bin", "Debug", "net10.0", exeName);
-                    var releaseExe = Path.Combine(siblingRepo, "src", "CodeAtlas.Cli", "bin", "Release", "net10.0", exeName);
-                    var debugDll   = Path.Combine(siblingRepo, "src", "CodeAtlas.Cli", "bin", "Debug", "net10.0", "CodeAtlas.dll");
+                    var publishCliExe  = Path.Combine(siblingRepo, "publish", "cli", exeName);
+                    var publishRootExe = Path.Combine(siblingRepo, "publish", exeName);
+                    var releaseExe     = Path.Combine(siblingRepo, "src", "CodeAtlas.Cli", "bin", "Release", "net10.0", exeName);
+                    var debugExe       = Path.Combine(siblingRepo, "src", "CodeAtlas.Cli", "bin", "Debug", "net10.0", exeName);
+                    var debugDll       = Path.Combine(siblingRepo, "src", "CodeAtlas.Cli", "bin", "Debug", "net10.0", "CodeAtlas.dll");
 
-                    if (File.Exists(releaseExe)) return Path.GetFullPath(releaseExe);
-                    if (File.Exists(debugExe))   return Path.GetFullPath(debugExe);
-                    if (File.Exists(debugDll))   return Path.GetFullPath(debugDll);
+                    if (File.Exists(publishCliExe))  return Path.GetFullPath(publishCliExe);
+                    if (File.Exists(publishRootExe)) return Path.GetFullPath(publishRootExe);
+                    if (File.Exists(releaseExe))     return Path.GetFullPath(releaseExe);
+                    if (File.Exists(debugExe))       return Path.GetFullPath(debugExe);
+                    if (File.Exists(debugDll))       return Path.GetFullPath(debugDll);
                 }
                 current = current.Parent;
             }

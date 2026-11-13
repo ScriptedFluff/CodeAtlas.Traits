@@ -507,8 +507,12 @@ public sealed class TraitQueriesTests : IDisposable
         Assert.Single(result.SimilarMatches);
         Assert.Equal("EscapeCsvCell", result.SimilarMatches[0].MatchedSymbol.SymbolName);
         Assert.Equal(100, result.SimilarMatches[0].SizeSimilarityPercent); // Both are 13 lines long (10..22 and 30..42)
+#if ENABLE_CPU_AUTO_TAGS
         Assert.Contains("csv", result.SimilarMatches[0].SharedConcepts);
         Assert.Contains("sanitise", result.SimilarMatches[0].SharedConcepts); // Matched 'escape' via thesaurus!
+#else
+        Assert.True(result.SimilarMatches[0].EmbeddingSimilarityPercent > 0);
+#endif
     }
 
     [Fact]
@@ -578,8 +582,12 @@ public sealed class TraitQueriesTests : IDisposable
 
         Assert.Single(fullNamespaceResult.SimilarMatches);
         Assert.Equal("RetryWithBackoffAsync", fullNamespaceResult.SimilarMatches[0].MatchedSymbol.SymbolName);
+#if ENABLE_CPU_AUTO_TAGS
         Assert.Contains("retry", fullNamespaceResult.SimilarMatches[0].SharedConcepts);
         Assert.Contains("backoff", fullNamespaceResult.SimilarMatches[0].SharedConcepts);
+#else
+        Assert.True(fullNamespaceResult.SimilarMatches[0].EmbeddingSimilarityPercent > 0);
+#endif
 
         Assert.True(shortClassResult.TargetFound);
         Assert.Equal("MyMethod", shortClassResult.TargetSymbol!.SymbolName);

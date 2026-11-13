@@ -127,13 +127,13 @@ CodeAtlas.Traits status --json
 ## 3. MCP Server Usage (Gemini, GitHub Copilot, Claude, Cursor)
 
 ### 3.1 Registering the MCP Server
-Point your MCP client configuration to `CodeAtlas.Traits.Mcp` (or `CodeAtlas.Traits serve`):
+See [`SETUP.md`](SETUP.md) for full installation instructions. After publishing (`scripts/publish.ps1`), point your MCP client configuration to `publish\server\CodeAtlas.Traits.Mcp.exe`:
 
 ```json
 {
   "mcpServers": {
     "codeatlas-traits": {
-      "command": "D:\\Projects\\CodeAtlas.Traits\\src\\CodeAtlas.Traits.Mcp\\bin\\Debug\\net10.0\\CodeAtlas.Traits.Mcp.exe",
+      "command": "D:\\Projects\\CodeAtlas.Traits\\publish\\server\\CodeAtlas.Traits.Mcp.exe",
       "args": []
     }
   }

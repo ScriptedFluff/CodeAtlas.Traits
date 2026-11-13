@@ -20,7 +20,7 @@ public sealed class AuditDiffTraitsTool(
     RepoContext repoContext,
     ScanOrchestrator scanOrchestrator)
 {
-    [McpServerTool]
+    [McpServerTool(Name = "audit_diff_traits")]
     [Description("""
         Audits the current git diff (or explicit file paths) for post-implementation code review and cleanup:
         1. Lists any newly added/modified non-trivial symbols in the diff that are still untagged so the AI can tag them.

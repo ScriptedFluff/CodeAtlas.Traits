@@ -5,6 +5,9 @@
 > [!WARNING]
 > **Alpha Stage — Volatile Codebase**: `CodeAtlas.Traits` is currently in active **Alpha** development. Its database schema (`traits.db`), CLI commands, MCP tool contracts, and internal APIs are still evolving rapidly and may change without notice.
 
+- **Installation & MCP Setup**: See [`SETUP.md`](SETUP.md)
+- **Full CLI & MCP Usage Guide**: See [`USAGE.md`](USAGE.md)
+
 ---
 
 ## 🎯 Overview

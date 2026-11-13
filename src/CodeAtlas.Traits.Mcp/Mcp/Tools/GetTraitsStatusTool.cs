@@ -23,7 +23,7 @@ public sealed class GetTraitsStatusTool(
     RepoContext repoContext,
     ScanOrchestrator scanOrchestrator)
 {
-    [McpServerTool]
+    [McpServerTool(Name = "get_traits_status")]
     [Description("""
         Returns the current synchronisation state, scan progress, and tagging coverage summary for the workspace.
         Can also trigger a rescan from CodeAtlas when forceRescan is true.
