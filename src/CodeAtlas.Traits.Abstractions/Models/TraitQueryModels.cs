@@ -122,4 +122,13 @@ public sealed record CpuModelStatusDto(
     int EmbeddingDimensions,
     string Description);
 
+/// <summary>
+/// Usage count summary for a single capability or technology tag across the repository.
+/// </summary>
+public sealed record TagUsageCount(
+    string Tag,
+    int SymbolCount,
+    int UniqueBodyCount);
+
+
 

@@ -432,6 +432,66 @@ public sealed class TraitQueries(SqliteConnection connection)
     }
 
     /// <summary>
+    /// Returns the most frequently used capability and technology tags across non-trivial symbols in the repository.
+    /// </summary>
+    public IReadOnlyList<TagUsageCount> GetTopTags(
+        string? language = null,
+        string? symbolType = null,
+        bool? onlyUtilities = null,
+        int limit = 50)
+    {
+        // ── 1. Declarations ──
+        string? normalisedLanguage;
+        string? normalisedType;
+        int? utilityFlag;
+        int effectiveLimit;
+        List<TagUsageCount> results;
+
+        // ── 2. Preconditions & Guard Clauses ──
+        normalisedLanguage = LanguageNormalizer.Normalise(language);
+        normalisedType     = string.IsNullOrWhiteSpace(symbolType) ? null : symbolType.Trim();
+        utilityFlag        = onlyUtilities.HasValue ? (onlyUtilities.Value ? 1 : 0) : null;
+        effectiveLimit     = Math.Clamp(limit, 1, 500);
+        results            = [];
+
+        // ── 3. Intent-First Narrative ──
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = """
+                SELECT t.tag,
+                       COUNT(DISTINCT s.id)        AS symbol_cnt,
+                       COUNT(DISTINCT t.body_hash) AS body_cnt
+                FROM trait_tags t
+                JOIN trait_entries e    ON e.body_hash = t.body_hash
+                JOIN symbol_snapshots s ON s.body_hash = t.body_hash
+                WHERE s.is_trivial = 0
+                  AND (@lang IS NULL OR s.language = @lang COLLATE NOCASE)
+                  AND (@type IS NULL OR s.symbol_type = @type COLLATE NOCASE)
+                  AND (@util IS NULL OR e.is_utility = @util)
+                GROUP BY t.tag
+                ORDER BY symbol_cnt DESC, body_cnt DESC, t.tag ASC
+                LIMIT @limit;
+                """;
+            cmd.Parameters.AddWithValue("@lang", (object?)normalisedLanguage ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@type", (object?)normalisedType ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@util", (object?)utilityFlag ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@limit", effectiveLimit);
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                results.Add(new TagUsageCount(
+                    Tag:             reader.GetString(0),
+                    SymbolCount:     reader.GetInt32(1),
+                    UniqueBodyCount: reader.GetInt32(2)));
+            }
+        }
+
+        // ── 4. Output / Return ──
+        return results;
+    }
+
+    /// <summary>
     /// Computes the current traits coverage statistics for the repository.
     /// </summary>
     public TraitsCoverageSummary GetCoverageSummary(bool isScanInProgress, string? language = null)

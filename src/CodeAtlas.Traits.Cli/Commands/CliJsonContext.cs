@@ -17,4 +17,5 @@ public sealed record CliStatusDto(
 [JsonSerializable(typeof(IReadOnlyList<DuplicateBodyGroup>))]
 [JsonSerializable(typeof(SimilarToLocationResult))]
 [JsonSerializable(typeof(CpuModelStatusDto))]
+[JsonSerializable(typeof(IReadOnlyList<TagUsageCount>))]
 internal sealed partial class CliJsonContext : JsonSerializerContext { }

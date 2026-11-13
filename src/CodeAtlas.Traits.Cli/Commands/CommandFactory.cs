@@ -28,6 +28,7 @@ public static class CommandFactory
         rootCommand.AddCommand(CreateSimilarCommand());
         rootCommand.AddCommand(CreateInspectCommand());
         rootCommand.AddCommand(CreateTagCommand());
+        rootCommand.AddCommand(CreateTagsCommand());
         rootCommand.AddCommand(CreateUntaggedCommand());
         rootCommand.AddCommand(CreateDuplicatesCommand());
         rootCommand.AddCommand(CreateModelCommand());
@@ -184,6 +185,52 @@ public static class CommandFactory
         {
             await ExecuteUntaggedCommandAsync(repo?.FullName ?? Environment.CurrentDirectory, dbDir?.FullName, lang, limit, includeAuto, json);
         }, repoOpt, dbDirOpt, langOpt, limitOpt, includeAutoOpt, jsonOpt);
+
+        // ── 3. Output / Return ──
+        return cmd;
+    }
+
+    private static Command CreateTagsCommand()
+    {
+        // ── 1. Declarations ──
+        Option<DirectoryInfo?> repoOpt;
+        Option<DirectoryInfo?> dbDirOpt;
+        Option<string?> langOpt;
+        Option<string?> typeOpt;
+        Option<bool?> utilityOpt;
+        Option<int> limitOpt;
+        Option<bool> jsonOpt;
+        Command cmd;
+
+        // ── 2. Intent-First Narrative ──
+        repoOpt    = new Option<DirectoryInfo?>(new[] { "--repo", "-r" }, "Repository path");
+        dbDirOpt   = new Option<DirectoryInfo?>("--db-dir", "Override directory for SQLite databases");
+        langOpt    = new Option<string?>(new[] { "--language", "--lang" }, "Filter by programming language (e.g. csharp, typescript)");
+        typeOpt    = new Option<string?>("--type", "Filter by symbol type (Class, Method, Function)");
+        utilityOpt = new Option<bool?>("--utility", "Filter by utility status (true/false)");
+        limitOpt   = new Option<int>(new[] { "--limit", "-l" }, () => 50, "Maximum number of tags to return");
+        jsonOpt    = new Option<bool>("--json", "Output tag frequency counts as JSON");
+
+        cmd = new Command("tags", "List the most frequently used capability and technology tags in the repository");
+        cmd.AddOption(repoOpt);
+        cmd.AddOption(dbDirOpt);
+        cmd.AddOption(langOpt);
+        cmd.AddOption(typeOpt);
+        cmd.AddOption(utilityOpt);
+        cmd.AddOption(limitOpt);
+        cmd.AddOption(jsonOpt);
+
+        cmd.SetHandler(async (repo, dbDir, lang, type, utility, limit, json) =>
+        {
+            await ExecuteTagsCommandAsync(
+                repo?.FullName ?? Environment.CurrentDirectory,
+                dbDir?.FullName,
+                lang,
+                type,
+                utility,
+                limit,
+                json);
+        }, repoOpt, dbDirOpt, langOpt, typeOpt, utilityOpt, limitOpt, jsonOpt);
 
         // ── 3. Output / Return ──
         return cmd;
@@ -777,5 +824,54 @@ public static class CommandFactory
         Console.WriteLine($"Saved detailed AI traits for [{match.SymbolType}] {match.ClassName}:{match.SymbolName} (body_hash: {match.BodyHash})");
         Console.WriteLine($"  Tags:    {string.Join(", ", match.Tags)}");
         Console.WriteLine($"  Summary: {match.Summary}");
+    }
+
+    private static async Task ExecuteTagsCommandAsync(
+        string repoRoot,
+        string? customDbDir,
+        string? language,
+        string? symbolType,
+        bool? onlyUtilities,
+        int limit,
+        bool isJson)
+    {
+        // ── 1. Declarations ──
+        WorkspaceInfo workspace;
+        ScanOrchestrator orchestrator;
+        IReadOnlyList<TagUsageCount> topTags;
+
+        // ── 2. Intent-First Narrative ──
+        workspace    = WorkspacePathResolver.ResolveWorkspace(repoRoot, customDbDir);
+        orchestrator = new ScanOrchestrator();
+        await orchestrator.EnsureScannedAsync(
+            workspace.WorkspaceRoot,
+            completeOnlyResponse: true,
+            forceRescan: false,
+            customDbDir: customDbDir,
+            language: language);
+
+        using var db = new TraitsDb(workspace.TraitsDbPath);
+        db.Migrate();
+        topTags = db.Traits.GetTopTags(language, symbolType, onlyUtilities, limit);
+
+        // ── 3. Output / Return ──
+        if (isJson)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(topTags, CliJsonContext.Default.IReadOnlyListTagUsageCount));
+            return;
+        }
+
+        if (topTags.Count == 0)
+        {
+            Console.WriteLine("No tags found.");
+            return;
+        }
+
+        Console.WriteLine($"Top {topTags.Count} most used tag(s) in {workspace.WorkspaceRoot}:");
+        for (var i = 0; i < topTags.Count; i++)
+        {
+            var item = topTags[i];
+            Console.WriteLine($"  {i + 1,3}. {item.Tag,-28} {item.SymbolCount,6} symbol(s) ({item.UniqueBodyCount} unique bodies)");
+        }
     }
 }

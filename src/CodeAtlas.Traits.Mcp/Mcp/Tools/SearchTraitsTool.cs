@@ -15,6 +15,13 @@ public sealed record SearchTraitsResponse(
     TraitsCoverageSummary? Coverage,
     IReadOnlyList<TraitSearchMatch> Matches);
 
+public sealed record TopTagsResponse(
+    string Status,
+    string Message,
+    ScanProgressSnapshot ScanProgress,
+    TraitsCoverageSummary? Coverage,
+    IReadOnlyList<TagUsageCount> TopTags);
+
 [McpServerToolType]
 public sealed class SearchTraitsTool(
     RepoContext repoContext,
@@ -90,6 +97,67 @@ public sealed class SearchTraitsTool(
             ScanProgress: scanSnapshot,
             Coverage:     coverage,
             Matches:      matches);
+    }
+
+    [McpServerTool]
+    [Description("""
+        Returns the most frequently used capability and technology tags across non-trivial symbols in the repository, ranked by symbol count and unique body_hash count.
+        Useful for discovering what capabilities, domain concepts, and libraries exist in the codebase before running 'search_traits'.
+        """)]
+    public async Task<TopTagsResponse> GetTopTagsAsync(
+        [Description("Optional: filter by programming language (e.g. csharp, typescript, javascript, powershell).")] string? language = null,
+        [Description("Optional: filter by symbol type (Class, Method, Function).")] string? symbolType = null,
+        [Description("Optional: if true, counts tags only across generic/reusable utility methods and classes.")] bool? onlyUtilities = null,
+        [Description("Optional: maximum number of tags to return (default 50, max 500).")] int limit = 50,
+        [Description("Optional: if false (default), returns early with 'scanning_in_progress' if a cold scan takes >1.5s. Set true to block until scan completion.")] bool completeOnlyResponse = false,
+        [Description("Optional: target repository/workspace directory (defaults to active workspace).")] string? targetDirectory = null,
+        CancellationToken ct = default)
+    {
+        // ── 1. Declarations ──
+        string effectiveRepo;
+        WorkspaceInfo workspace;
+        string? resolvedLanguage;
+        ScanProgressSnapshot scanSnapshot;
+        IReadOnlyList<TagUsageCount> topTags;
+        TraitsCoverageSummary coverage;
+
+        // ── 2. Preconditions & Guard Clauses ──
+        effectiveRepo    = ResolveTargetDirectory(targetDirectory, repoContext);
+        workspace        = WorkspacePathResolver.ResolveWorkspace(effectiveRepo, repoContext.CustomDbDir);
+        resolvedLanguage = LanguageNormalizer.Normalise(language);
+
+        // ── 3. Intent-First Narrative ──
+        scanSnapshot = await scanOrchestrator.EnsureScannedAsync(
+            workspace.WorkspaceRoot,
+            completeOnlyResponse: completeOnlyResponse,
+            forceRescan: false,
+            customDbDir: repoContext.CustomDbDir,
+            language: resolvedLanguage,
+            ct: ct);
+
+        if (scanSnapshot.State == ScanState.ScanningInProgress && !completeOnlyResponse)
+        {
+            return new TopTagsResponse(
+                Status:       "scanning_in_progress",
+                Message:      "CodeAtlas.Traits is currently scanning missing repository information in the background. Call again with completeOnlyResponse: true to wait for the full result.",
+                ScanProgress: scanSnapshot,
+                Coverage:     null,
+                TopTags:      []);
+        }
+
+        using var db = new TraitsDb(workspace.TraitsDbPath);
+        db.Migrate();
+
+        topTags  = db.Traits.GetTopTags(resolvedLanguage, symbolType, onlyUtilities, limit);
+        coverage = db.Traits.GetCoverageSummary(scanSnapshot.State == ScanState.ScanningInProgress, resolvedLanguage);
+
+        // ── 4. Output / Return ──
+        return new TopTagsResponse(
+            Status:       "ok",
+            Message:      $"Returned top {topTags.Count} most used tag(s). {coverage.Notice}",
+            ScanProgress: scanSnapshot,
+            Coverage:     coverage,
+            TopTags:      topTags);
     }
 
     private static string ResolveTargetDirectory(string? targetDirectory, RepoContext repoContext)

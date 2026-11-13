@@ -30,7 +30,20 @@ CodeAtlas.Traits scan D:\Projects\MyRepo
 CodeAtlas.Traits scan D:\Projects\MyRepo --json
 ```
 
-### 2.2 Search by Capability, Technology & Language Tags (`query`)
+### 2.2 List Most Used Tags (`tags`)
+Lists the most frequently used capability and technology tags across non-trivial symbols in the repository, ranked by symbol count and unique `body_hash` count:
+```powershell
+# Top 50 most used tags in the repository
+CodeAtlas.Traits tags -r D:\Projects\MyRepo
+
+# Top 25 tags across reusable C# utility methods/classes
+CodeAtlas.Traits tags -r D:\Projects\MyRepo --lang csharp --utility true --limit 25
+
+# Output JSON
+CodeAtlas.Traits tags -r D:\Projects\MyRepo --json
+```
+
+### 2.3 Search by Capability, Technology & Language Tags (`query`)
 Searches tagged symbols using the built-in synonym thesaurus (e.g. querying `sanitise` also matches `escape`, `clean`, `scrub`, and US/UK spelling variants). Language tags (`c#`, `typescript`, `powershell`) automatically filter by file language:
 ```powershell
 # Find reusable retry utilities in C#
@@ -131,6 +144,7 @@ Point your MCP client configuration to `CodeAtlas.Traits.Mcp` (or `CodeAtlas.Tra
 
 | MCP Tool | Purpose | Key Parameters |
 | :--- | :--- | :--- |
+| **`get_top_tags`** | List the most frequently used capability and technology tags in the repository. | `language`, `symbolType`, `onlyUtilities`, `limit` (default `50`) |
 | **`search_traits`** | Search existing utilities/methods before writing new helpers. | `tags` (`"retry,polly,c#"`), `onlyUtilities`, `matchAllTags`, `useThesaurus` |
 | **`find_similar_to_location`** | Find duplicates/similar methods to a target symbol or `file:line`. | `location` (`"MyNamespace.MyClass:MyMethod"` or `"MyClass.cs:L35"`), `limit` |
 | **`get_symbol_for_analysis`** | Fetch a symbol's source body, `body_hash`, and current tags for AI analysis. | `target` (`"MyNamespace.MyClass:MyMethod"` or `"MyClass.cs:L35"`) |
