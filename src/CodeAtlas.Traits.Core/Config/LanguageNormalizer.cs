@@ -6,17 +6,12 @@ namespace CodeAtlas.Traits.Core.Config;
 /// </summary>
 public static class LanguageNormalizer
 {
-    private static readonly HashSet<string> CanonicalLanguages = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> TagFilterLanguages = new(StringComparer.OrdinalIgnoreCase)
     {
         "csharp",
         "typescript",
         "javascript",
-        "powershell",
-        "html",
-        "css",
-        "json",
-        "yaml",
-        "sql"
+        "powershell"
     };
 
     /// <summary>
@@ -70,7 +65,7 @@ public static class LanguageNormalizer
 
         // ── 3. Intent-First Narrative ──
         normalised = Normalise(tag);
-        if (normalised is not null && CanonicalLanguages.Contains(normalised))
+        if (normalised is not null && TagFilterLanguages.Contains(normalised))
         {
             canonicalLanguage = normalised;
             return true;

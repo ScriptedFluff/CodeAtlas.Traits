@@ -20,6 +20,7 @@ namespace CodeAtlas.Traits.Mcp;
 [JsonSerializable(typeof(TraitsStatusResponse))]
 [JsonSerializable(typeof(TraitSearchMatch))]
 [JsonSerializable(typeof(IReadOnlyList<TraitSearchMatch>))]
+[JsonSerializable(typeof(LocalBuildingStyleSummary))]
 [JsonSerializable(typeof(TagUsageCount))]
 [JsonSerializable(typeof(IReadOnlyList<TagUsageCount>))]
 [JsonSerializable(typeof(TagCombinationCount))]

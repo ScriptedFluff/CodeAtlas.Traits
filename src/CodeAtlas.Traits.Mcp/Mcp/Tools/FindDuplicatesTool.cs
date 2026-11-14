@@ -35,8 +35,8 @@ public sealed class FindDuplicatesTool(
 {
     [McpServerTool(Name = "find_duplicate_bodies")]
     [Description("""
-        Detects exact duplicate non-trivial methods, functions, or class skeletons across the codebase that share the same whitespace-normalised body_hash.
-        Ideal for post-implementation code review and cleanup to spot duplicated private helpers that should be consolidated into shared extensions or services.
+        Detects exact duplicate and Type-2 renamed-clone methods, functions, or class skeletons across the codebase, plus file-level Subsystem Duplication Clusters.
+        WORKFLOW 2 (Post-Generation 'Compiler Pass' Consolidation): Run this AFTER generating and verifying a working feature to consolidate duplicated private helpers, DTOs, or subsystem stubs into shared extensions or services.
         """)]
     public async Task<FindDuplicatesResponse> FindDuplicateBodiesAsync(
         [Description("Optional: filter by programming language (e.g. csharp, typescript, powershell).")] string? language = null,
@@ -96,7 +96,8 @@ public sealed class FindDuplicatesTool(
 
     [McpServerTool(Name = "find_similar_traits")]
     [Description("""
-        Finds semantic near-duplicate classes, methods, or functions that have DIFFERENT implementations (different body_hash) yet share multiple overlapping capability and technology tags (e.g. two different retry loops or two different CSV escaping methods).
+        Finds semantic near-duplicate classes, methods, or functions that have DIFFERENT implementations (different body_hash) yet solve a very similar problem (sharing multiple overlapping capability and technology tags, e.g. GetCustomerCached vs LoadCustomerFromCache vs RetrieveCustomerUsingRedis).
+        WORKFLOW 2 (Post-Generation 'Compiler Pass' Consolidation): Use this to surface semantic overlap across the repository that humans and symbol-name searches miss.
         """)]
     public async Task<FindSimilarTraitsResponse> FindSimilarTraitsAsync(
         [Description("Optional: filter by programming language (e.g. csharp, typescript, powershell).")] string? language = null,
@@ -151,8 +152,10 @@ public sealed class FindDuplicatesTool(
 
     [McpServerTool(Name = "find_similar_to_location")]
     [Description("""
-        Finds symbols in the repository that are similar in size and capability/synonym traits to a target symbol (e.g. 'MyNamespace.MyClass:MyMethod' or 'MyClass:MyMethod') or file:line location ('MyClass.cs:L35').
-        Automatically checks if the repository and target symbol have been scanned and tagged; if not, scans and auto-tags them before computing similarity.
+        Finds symbols in the repository that are similar in size, CPU ONNX semantic embedding, and capability/synonym traits to a target symbol ('MyNamespace.MyClass:MyMethod' or 'MyClass:MyMethod') or file:line location ('MyClass.cs:L35').
+        Use this in BOTH workflows:
+        - WORKFLOW 1 (Pattern Discovery): Point at an existing class/method to discover sibling implementations and learn the repository's local building style (where similar classes live, how dependencies are wrapped).
+        - WORKFLOW 2 (Post-Generation Consolidation): Point at a newly written method or class after proving it works to check if the repository already has a semantically similar implementation to consolidate with.
         """)]
     public async Task<FindSimilarToLocationResponse> FindSimilarToLocationAsync(
         [Description("Target symbol reference (e.g. 'MyNamespace.MyClass:MyMethod', 'MyClass:MyMethod') or file and line reference ('MyClass.cs:L35').")] string location,

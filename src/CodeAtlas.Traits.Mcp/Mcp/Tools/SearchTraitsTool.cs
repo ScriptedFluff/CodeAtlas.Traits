@@ -13,7 +13,8 @@ public sealed record SearchTraitsResponse(
     string Message,
     ScanProgressSnapshot ScanProgress,
     TraitsCoverageSummary? Coverage,
-    IReadOnlyList<TraitSearchMatch> Matches);
+    IReadOnlyList<TraitSearchMatch> Matches,
+    LocalBuildingStyleSummary? LocalBuildingStyles = null);
 
 public sealed record TopTagsResponse(
     string Status,
@@ -30,16 +31,18 @@ public sealed class SearchTraitsTool(
 {
     [McpServerTool(Name = "search_traits")]
     [Description("""
-        Searches the CodeAtlas.Traits capability and technology index for classes, methods, and functions matching capability/behaviour tags (e.g. 'retry', 'polly', 'linq', 'compare', 'string', 'csv').
+        Searches the CodeAtlas.Traits repository memory for classes, methods, and functions matching one or more capability, domain, or technology concepts (e.g. 'redis, sql, stored procedure' or 'retry, polly, c#').
+        WORKFLOW 1 (Before Writing Code — Pattern & Reuse Discovery): Call this BEFORE implementing a new service, helper, or feature. Even if none of the returned candidates are directly reusable as-is, inspect the matches and 'LocalBuildingStyles' summary to learn the repository's local conventions (which directory/namespace similar code lives in, how dependencies like Redis/SQL/Retry are wrapped, and naming conventions) so new code feels like it belongs in the repository.
+        Multi-concept queries automatically rank candidates by how many requested concepts they match (e.g. 3/3 -> 2/3 -> 1/3).
         Language names passed in tags (such as 'c#', 'csharp', 'typescript', 'powershell') automatically filter out non-matching language files via CodeAtlas.
         By default, completeOnlyResponse is false: if a cold repository scan is taking longer than 1.5 seconds, this tool returns 'scanning_in_progress' immediately so the AI knows the server has not timed out. Pass completeOnlyResponse: true to wait until scanning finishes.
         """)]
     public async Task<SearchTraitsResponse> SearchTraitsAsync(
-        [Description("Comma-separated or space-separated capability/technology tags to search for (e.g. 'retry,polly,c#' or 'string,compare').")] string tags,
+        [Description("Comma-separated concepts/tags or JSON array to search for (e.g. 'redis, sql, stored procedure' or 'retry,polly,c#'). Multi-word concepts separated by commas are preserved automatically.")] string tags,
         [Description("Optional: filter by programming language (e.g. csharp, typescript, javascript, powershell).")] string? language = null,
         [Description("Optional: filter by symbol type (Class, Method, Function).")] string? symbolType = null,
         [Description("Optional: if true, returns only generic/reusable utility methods and classes.")] bool? onlyUtilities = null,
-        [Description("Optional: if true (default), symbols must match ALL capability tags; if false, matches ANY tag.")] bool matchAllTags = true,
+        [Description("Optional: if false (default), ranks candidates by number of matched concepts (e.g. 3/3 first, then 2/3, then 1/3); if true, requires all concepts when strict matches exist.")] bool matchAllTags = false,
         [Description("Optional: if true (default), expands tags using loaded thesaurus/dictionary synonym packs (e.g. 'sanitise' matches 'escape', 'clean', 'sanitize').")] bool useThesaurus = true,
         [Description("Optional: maximum number of matches to return (default 25).")] int limit = 25,
         [Description("Optional: if false (default), returns early with 'scanning_in_progress' if a cold scan takes >1.5s. Set true to block until scan completion.")] bool completeOnlyResponse = false,
@@ -55,6 +58,7 @@ public sealed class SearchTraitsTool(
         ScanProgressSnapshot scanSnapshot;
         ThesaurusEngine? thesaurus;
         IReadOnlyList<TraitSearchMatch> matches;
+        LocalBuildingStyleSummary buildingStyles;
         TraitsCoverageSummary coverage;
 
         // ── 2. Preconditions & Guard Clauses ──
@@ -88,16 +92,18 @@ public sealed class SearchTraitsTool(
         using var db = new TraitsDb(workspace.TraitsDbPath);
         db.Migrate();
 
-        matches  = db.Traits.SearchByTraits(capabilityTags, resolvedLanguage, symbolType, onlyUtilities, matchAllTags, limit, useThesaurus, thesaurus);
-        coverage = db.Traits.GetCoverageSummary(scanSnapshot.State == ScanState.ScanningInProgress, resolvedLanguage);
+        matches        = db.Traits.SearchByTraits(capabilityTags, resolvedLanguage, symbolType, onlyUtilities, matchAllTags, limit, useThesaurus, thesaurus);
+        buildingStyles = CodeAtlas.Traits.Core.Db.Queries.TraitQueries.BuildLocalBuildingStyleSummary(matches, capabilityTags);
+        coverage       = db.Traits.GetCoverageSummary(scanSnapshot.State == ScanState.ScanningInProgress, resolvedLanguage);
 
         // ── 4. Output / Return ──
         return new SearchTraitsResponse(
-            Status:       "ok",
-            Message:      $"Found {matches.Count} matching symbol(s). {coverage.Notice}",
-            ScanProgress: scanSnapshot,
-            Coverage:     coverage,
-            Matches:      matches);
+            Status:              "ok",
+            Message:             $"Found {matches.Count} matching symbol(s) across {capabilityTags.Count} requested concept(s). {coverage.Notice}",
+            ScanProgress:        scanSnapshot,
+            Coverage:            coverage,
+            Matches:             matches,
+            LocalBuildingStyles: buildingStyles);
     }
 
     [McpServerTool(Name = "get_top_tags")]
@@ -190,6 +196,20 @@ public sealed class SearchTraitsTool(
             return [];
         }
 
-        return rawTags.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var trimmed = rawTags.Trim().TrimStart('[').TrimEnd(']');
+        if (trimmed.Contains(',') || trimmed.Contains(';'))
+        {
+            return trimmed
+                .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(t => t.Trim('"', '\'', ' '))
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .ToArray();
+        }
+
+        return trimmed
+            .Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(t => t.Trim('"', '\'', ' '))
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .ToArray();
     }
 }

@@ -64,7 +64,7 @@ public static class StringExtensions
         }
 
         // ── 3. Intent-First Narrative ──
-        trimmed = rawTag.Trim().ToLowerInvariant();
+        trimmed = rawTag.NormaliseWhitespace().ToLowerInvariant().Replace(' ', '_');
 
         // ── 4. Output / Return ──
         return trimmed;

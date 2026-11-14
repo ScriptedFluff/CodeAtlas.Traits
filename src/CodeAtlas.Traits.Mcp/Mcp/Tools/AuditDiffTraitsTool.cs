@@ -22,9 +22,9 @@ public sealed class AuditDiffTraitsTool(
 {
     [McpServerTool(Name = "audit_diff_traits")]
     [Description("""
-        Audits the current git diff (or explicit file paths) for post-implementation code review and cleanup:
+        WORKFLOW 2 (Post-Generation 'Compiler Pass' Consolidation): Audits the current git diff (or explicit file paths) after a feature is built and verified:
         1. Lists any newly added/modified non-trivial symbols in the diff that are still untagged so the AI can tag them.
-        2. Flags any tagged symbols in the diff that duplicate an existing body_hash or overlap in capability/synonym traits with existing shared services or utilities.
+        2. Flags any symbols in the diff that duplicate an existing body_hash or overlap semantically in capability/synonym traits with existing shared services or utilities so you can consolidate them.
         """)]
     public async Task<AuditDiffTraitsResponse> AuditDiffTraitsAsync(
         [Description("Optional: git commit or ref to diff against (defaults to working tree + HEAD).")] string? sinceCommit = null,

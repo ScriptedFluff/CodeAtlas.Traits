@@ -1369,6 +1369,73 @@ public sealed class TraitQueries(SqliteConnection connection, string? aiJsonlPat
         return CpuSemanticEngine.SerialiseEmbedding(engine.ComputeEmbedding(text, thesaurus));
     }
 
+    /// <summary>
+    /// Builds a summary of the repository's "Local Building Styles" (common directory locations, enclosing class patterns,
+    /// and companion traits) inferred from a set of <see cref="TraitSearchMatch"/> results.
+    /// </summary>
+    public static LocalBuildingStyleSummary BuildLocalBuildingStyleSummary(
+        IReadOnlyList<TraitSearchMatch> matches,
+        IReadOnlyList<string>? requestedConcepts = null)
+    {
+        // ── 1. Declarations ──
+        HashSet<string> requestedSet;
+        IReadOnlyList<string> commonDirectories;
+        IReadOnlyList<string> commonClasses;
+        IReadOnlyList<string> companionTraits;
+        string guidance;
+
+        // ── 2. Preconditions & Guard Clauses ──
+        if (matches is null || matches.Count == 0)
+        {
+            return new LocalBuildingStyleSummary(
+                CommonDirectories:      [],
+                CommonClassConventions: [],
+                CompanionTraits:        [],
+                Guidance:               "No existing matches found in the repository for these concepts.");
+        }
+
+        // ── 3. Intent-First Narrative ──
+        requestedSet = requestedConcepts is not null
+            ? new HashSet<string>(requestedConcepts.Select(c => c.NormaliseTag()), StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        commonDirectories = matches
+            .Select(m => (Path.GetDirectoryName(m.FilePath) ?? string.Empty).Replace('\\', '/'))
+            .Where(d => !string.IsNullOrWhiteSpace(d))
+            .GroupBy(d => d, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+            .Take(5)
+            .Select(g => $"{g.Key} ({g.Count()})")
+            .ToList();
+
+        commonClasses = matches
+            .Select(m => !string.IsNullOrWhiteSpace(m.ClassName) ? m.ClassName! : m.SymbolName)
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(6)
+            .ToList();
+
+        companionTraits = matches
+            .SelectMany(m => m.Tags)
+            .Where(t => !string.IsNullOrWhiteSpace(t) && !requestedSet.Contains(t))
+            .GroupBy(t => t, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+            .Take(8)
+            .Select(g => g.Key)
+            .ToList();
+
+        guidance = "Inspect top candidates to (1) reuse directly, (2) extend an existing implementation, or (3) mirror their directory placement, class naming, and companion traits as the repository's local building style.";
+
+        // ── 4. Output / Return ──
+        return new LocalBuildingStyleSummary(
+            CommonDirectories:      commonDirectories,
+            CommonClassConventions: commonClasses,
+            CompanionTraits:        companionTraits,
+            Guidance:               guidance);
+    }
+
     private static ParsedSearchFilter ParseSearchFilter(
         IReadOnlyList<string>? rawTags,
         string? explicitLanguage,
@@ -1401,10 +1468,7 @@ public sealed class TraitQueries(SqliteConnection connection, string? aiJsonlPat
                 if (!string.IsNullOrWhiteSpace(norm) && !capabilityTags.Contains(norm, StringComparer.Ordinal))
                 {
                     capabilityTags.Add(norm);
-                    var cluster = thesaurus is not null
-                        ? thesaurus.ExpandTagToCluster(norm)
-                        : [norm];
-                    tagClusters.Add(cluster.Count > 0 ? cluster : [norm]);
+                    tagClusters.Add(ExpandSearchConceptCluster(norm, thesaurus));
                 }
             }
         }
@@ -1419,7 +1483,148 @@ public sealed class TraitQueries(SqliteConnection connection, string? aiJsonlPat
             MatchAllTags:   matchAllTags);
     }
 
+    private static IReadOnlyList<string> ExpandSearchConceptCluster(string normalisedTag, ThesaurusEngine? thesaurus)
+    {
+        // ── 1. Declarations ──
+        HashSet<string> clusterSet;
+        IReadOnlyList<string> baseCluster;
+
+        // ── 2. Intent-First Narrative ──
+        clusterSet  = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { normalisedTag };
+        baseCluster = thesaurus is not null ? thesaurus.ExpandTagToCluster(normalisedTag) : [normalisedTag];
+
+        foreach (var term in baseCluster)
+        {
+            clusterSet.Add(term);
+        }
+
+        if (normalisedTag.Contains('_', StringComparison.Ordinal))
+        {
+            clusterSet.Add(normalisedTag.Replace("_", string.Empty, StringComparison.Ordinal));
+        }
+
+        // Bridge natural search terms to zero-cost structural traits seeded by AutoTraitTagger
+        if (clusterSet.Contains("redis") || clusterSet.Contains("cache") || clusterSet.Contains("caching"))
+        {
+            clusterSet.Add("accesses_redis");
+            clusterSet.Add("redis");
+            clusterSet.Add("cache");
+        }
+
+        if (clusterSet.Contains("retry") || clusterSet.Contains("polly") || clusterSet.Contains("backoff"))
+        {
+            clusterSet.Add("has_retry_logic");
+            clusterSet.Add("retry");
+        }
+
+        if (clusterSet.Contains("sql") || clusterSet.Contains("database") || clusterSet.Contains("transaction") || clusterSet.Contains("db"))
+        {
+            clusterSet.Add("database_transaction");
+            clusterSet.Add("sql");
+            clusterSet.Add("dapper");
+        }
+
+        if (clusterSet.Contains("stored_procedure") ||
+            normalisedTag.Equals("stored", StringComparison.OrdinalIgnoreCase) ||
+            normalisedTag.Equals("procedure", StringComparison.OrdinalIgnoreCase) ||
+            clusterSet.Contains("sproc") ||
+            clusterSet.Contains("proc"))
+        {
+            clusterSet.Add("stored_procedure");
+            clusterSet.Add("storedproc");
+            clusterSet.Add("storedprocedure");
+            clusterSet.Add("sproc");
+            clusterSet.Add("usp_");
+        }
+
+        if (clusterSet.Contains("applock") || clusterSet.Contains("sp_getapplock"))
+        {
+            clusterSet.Add("uses_applock");
+        }
+
+        if (clusterSet.Contains("cancellation") || clusterSet.Contains("cancellationtoken") || clusterSet.Contains("async"))
+        {
+            clusterSet.Add("cancellable_async");
+        }
+
+        if (clusterSet.Contains("extension") || clusterSet.Contains("extensions"))
+        {
+            clusterSet.Add("extension_method");
+        }
+
+        // ── 3. Output / Return ──
+        return clusterSet.ToList();
+    }
+
     private List<TraitSearchMatch> ExecuteTraitSearchQuery(ParsedSearchFilter filter, int limit)
+    {
+        // ── 1. Declarations ──
+        List<TraitSearchMatch> primaryResults;
+        bool hadStrictTagMatches;
+        HashSet<string> seenSymbolKeys;
+
+        // ── 2. Intent-First Narrative ──
+        primaryResults      = ExecuteTraitTagSearchPass(filter, limit, requireAllClusters: filter.MatchAllTags);
+        hadStrictTagMatches = primaryResults.Count > 0;
+
+        // If a multi-concept query had matchAllTags = true and found 0 strict conjunctive tag matches,
+        // automatically fall back to ranked partial matching (e.g. 2/3 concepts, 1/3 concepts) so discovery queries never fail silently.
+        if (!hadStrictTagMatches && filter.MatchAllTags && filter.TagClusters.Count > 1)
+        {
+            primaryResults = ExecuteTraitTagSearchPass(filter, limit, requireAllClusters: false);
+        }
+
+        // Supplement with symbol identifier / class / signature / summary concept matches when in discovery mode (!matchAllTags)
+        // or when explicit trait_tags produced no strict matches (e.g. 'auto-cpu' symbols not yet manually AI-tagged).
+        if (filter.TagClusters.Count > 0 && (!filter.MatchAllTags || !hadStrictTagMatches) && primaryResults.Count < limit)
+        {
+            seenSymbolKeys = primaryResults
+                .Select(r => $"{r.FilePath}:{r.StartLine}:{r.SymbolName}")
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            SupplementWithSymbolMetadataMatches(
+                filter,
+                primaryResults,
+                seenSymbolKeys,
+                requireAllClusters: false,
+                limit: limit);
+        }
+
+        // ── 3. Output / Return ──
+        return primaryResults
+            .OrderByDescending(r => r.MatchedConceptCount)
+            .ThenByDescending(r => CountExactTagMatches(r.Tags, filter.CapabilityTags))
+            .ThenByDescending(r => string.Equals(r.TagSource, TraitEntry.SourceAiDetailed, StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+            .ThenByDescending(r => r.IsUtility ? 1 : 0)
+            .ThenBy(r => r.FilePath, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.StartLine)
+            .Take(limit)
+            .ToList();
+    }
+
+    private static int CountExactTagMatches(IReadOnlyList<string> symbolTags, IReadOnlyList<string> requestedTags)
+    {
+        if (symbolTags.Count == 0 || requestedTags.Count == 0)
+        {
+            return 0;
+        }
+
+        var count = 0;
+        foreach (var req in requestedTags)
+        {
+            if (symbolTags.Contains(req, StringComparer.OrdinalIgnoreCase))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private List<TraitSearchMatch> ExecuteTraitTagSearchPass(
+        ParsedSearchFilter filter,
+        int limit,
+        bool requireAllClusters)
     {
         // ── 1. Declarations ──
         List<TraitSearchMatch> results;
@@ -1431,7 +1636,7 @@ public sealed class TraitQueries(SqliteConnection connection, string? aiJsonlPat
 
         using (var cmd = connection.CreateCommand())
         {
-            BuildTraitSearchSql(cmd, filter, limit);
+            BuildTraitSearchSql(cmd, filter, limit, requireAllClusters);
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -1461,31 +1666,197 @@ public sealed class TraitQueries(SqliteConnection connection, string? aiJsonlPat
 
         foreach (var (snap, summary, isUtility, tagSource, category, actionable, cluster) in matchedRows)
         {
-            var tags = GetTagsForBodyHash(snap.BodyHash);
+            var tags            = GetTagsForBodyHash(snap.BodyHash);
+            var matchedConcepts = ComputeMatchedConcepts(filter, snap.SymbolName, snap.ClassName, snap.Signature, summary, tags);
             results.Add(new TraitSearchMatch(
-                SymbolName:       snap.SymbolName,
-                SymbolType:       snap.SymbolType,
-                ClassName:        snap.ClassName,
-                Language:         snap.Language,
-                FilePath:         snap.FilePath,
-                StartLine:        snap.StartLine,
-                EndLine:          snap.EndLine,
-                Signature:        snap.Signature,
-                BodyHash:         snap.BodyHash,
-                Summary:          summary,
-                IsUtility:        isUtility,
-                Tags:             tags,
-                TagSource:        tagSource,
-                Category:         category,
-                IsActionableDebt: actionable,
-                ClusterName:      cluster));
+                SymbolName:             snap.SymbolName,
+                SymbolType:             snap.SymbolType,
+                ClassName:              snap.ClassName,
+                Language:               snap.Language,
+                FilePath:               snap.FilePath,
+                StartLine:              snap.StartLine,
+                EndLine:                snap.EndLine,
+                Signature:              snap.Signature,
+                BodyHash:               snap.BodyHash,
+                Summary:                summary,
+                IsUtility:              isUtility,
+                Tags:                   tags,
+                TagSource:              tagSource,
+                Category:               category,
+                IsActionableDebt:       actionable,
+                ClusterName:            cluster,
+                MatchedConceptCount:    matchedConcepts.Count,
+                TotalRequestedConcepts: filter.CapabilityTags.Count,
+                MatchedConcepts:        matchedConcepts));
         }
 
         // ── 3. Output / Return ──
         return results;
     }
 
-    private static void BuildTraitSearchSql(SqliteCommand cmd, ParsedSearchFilter filter, int limit)
+    private void SupplementWithSymbolMetadataMatches(
+        ParsedSearchFilter filter,
+        List<TraitSearchMatch> existingResults,
+        HashSet<string> seenSymbolKeys,
+        bool requireAllClusters,
+        int limit)
+    {
+        // ── 1. Declarations ──
+        List<(SymbolSnapshot Snapshot, string Summary, bool IsUtility, string TagSource, string? Category, bool Actionable, string? Cluster)> candidateRows;
+        int minRequiredConcepts;
+
+        // ── 2. Intent-First Narrative ──
+        candidateRows       = [];
+        minRequiredConcepts = requireAllClusters ? filter.TagClusters.Count : 1;
+
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = """
+                SELECT s.symbol_name, s.symbol_type, s.class_name, s.language,
+                       s.file_path, s.start_line, s.end_line, s.signature,
+                       s.body_hash, COALESCE(e.summary, ''), COALESCE(e.is_utility, 0),
+                       COALESCE(e.tag_source, 'auto-cpu'), e.category,
+                       COALESCE(e.is_actionable_debt, 1), e.cluster_name
+                FROM symbol_snapshots s
+                LEFT JOIN trait_entries e ON e.body_hash = s.body_hash
+                WHERE s.is_trivial = 0
+                  AND (@lang IS NULL OR s.language = @lang COLLATE NOCASE)
+                  AND (@type IS NULL OR s.symbol_type = @type COLLATE NOCASE)
+                  AND (@util IS NULL OR COALESCE(e.is_utility, 0) = @util);
+                """;
+            cmd.Parameters.AddWithValue("@lang", (object?)filter.Language ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@type", (object?)filter.SymbolType ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@util", filter.OnlyUtilities.HasValue ? (filter.OnlyUtilities.Value ? 1 : 0) : DBNull.Value);
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var snap = new SymbolSnapshot
+                {
+                    SymbolName = reader.GetString(0),
+                    SymbolType = reader.GetString(1),
+                    ClassName  = reader.IsDBNull(2) ? null : reader.GetString(2),
+                    Language   = reader.GetString(3),
+                    FilePath   = reader.GetString(4),
+                    StartLine  = reader.GetInt32(5),
+                    EndLine    = reader.GetInt32(6),
+                    StartByte  = 0,
+                    EndByte    = 0,
+                    Signature  = reader.IsDBNull(7) ? null : reader.GetString(7),
+                    BodyHash   = reader.GetString(8)
+                };
+                var key = $"{snap.FilePath}:{snap.StartLine}:{snap.SymbolName}";
+                if (seenSymbolKeys.Contains(key))
+                {
+                    continue;
+                }
+
+                candidateRows.Add((
+                    snap,
+                    reader.GetString(9),
+                    reader.GetInt32(10) == 1,
+                    reader.GetString(11),
+                    reader.IsDBNull(12) ? null : reader.GetString(12),
+                    reader.GetInt32(13) == 1,
+                    reader.IsDBNull(14) ? null : reader.GetString(14)));
+            }
+        }
+
+        foreach (var (snap, summary, isUtility, tagSource, category, actionable, cluster) in candidateRows)
+        {
+            var tags            = GetTagsForBodyHash(snap.BodyHash);
+            var matchedConcepts = ComputeMatchedConcepts(filter, snap.SymbolName, snap.ClassName, snap.Signature, summary, tags);
+            if (matchedConcepts.Count < minRequiredConcepts)
+            {
+                continue;
+            }
+
+            var effectiveUtility = isUtility || AutoTraitTagger.IsHighValueUtilityCandidate(
+                snap.FilePath,
+                snap.ClassName,
+                snap.SymbolName,
+                snap.SymbolType,
+                snap.Signature,
+                extractedContent: null);
+
+            if (filter.OnlyUtilities.HasValue && filter.OnlyUtilities.Value != effectiveUtility)
+            {
+                continue;
+            }
+
+            seenSymbolKeys.Add($"{snap.FilePath}:{snap.StartLine}:{snap.SymbolName}");
+            existingResults.Add(new TraitSearchMatch(
+                SymbolName:             snap.SymbolName,
+                SymbolType:             snap.SymbolType,
+                ClassName:              snap.ClassName,
+                Language:               snap.Language,
+                FilePath:               snap.FilePath,
+                StartLine:              snap.StartLine,
+                EndLine:                snap.EndLine,
+                Signature:              snap.Signature,
+                BodyHash:               snap.BodyHash,
+                Summary:                string.IsNullOrWhiteSpace(summary) ? $"Symbol '{snap.SymbolName}' matching [{string.Join(", ", matchedConcepts)}]." : summary,
+                IsUtility:              effectiveUtility,
+                Tags:                   tags,
+                TagSource:              tagSource,
+                Category:               category,
+                IsActionableDebt:       actionable,
+                ClusterName:            cluster,
+                MatchedConceptCount:    matchedConcepts.Count,
+                TotalRequestedConcepts: filter.CapabilityTags.Count,
+                MatchedConcepts:        matchedConcepts));
+        }
+    }
+
+    private static IReadOnlyList<string> ComputeMatchedConcepts(
+        ParsedSearchFilter filter,
+        string symbolName,
+        string? className,
+        string? signature,
+        string? summary,
+        IReadOnlyList<string> tags)
+    {
+        // ── 1. Declarations ──
+        List<string> matched;
+        HashSet<string> tagSet;
+        string combinedMetadata;
+
+        // ── 2. Preconditions & Guard Clauses ──
+        if (filter.CapabilityTags.Count == 0)
+        {
+            return [];
+        }
+
+        // ── 3. Intent-First Narrative ──
+        matched          = new List<string>(filter.CapabilityTags.Count);
+        tagSet           = new HashSet<string>(tags, StringComparer.OrdinalIgnoreCase);
+        combinedMetadata = $"{symbolName} {className} {signature} {summary}";
+
+        for (var i = 0; i < filter.CapabilityTags.Count; i++)
+        {
+            var concept = filter.CapabilityTags[i];
+            var cluster = filter.TagClusters[i];
+
+            var hitInTags = cluster.Any(term => tagSet.Contains(term));
+            var hitInMeta = !hitInTags && cluster.Any(term =>
+                term.Length >= 3 &&
+                combinedMetadata.Contains(term, StringComparison.OrdinalIgnoreCase));
+
+            if (hitInTags || hitInMeta)
+            {
+                matched.Add(concept);
+            }
+        }
+
+        // ── 4. Output / Return ──
+        return matched;
+    }
+
+    private static void BuildTraitSearchSql(
+        SqliteCommand cmd,
+        ParsedSearchFilter filter,
+        int limit,
+        bool requireAllClusters)
     {
         // ── 1. Declarations ──
         List<string> allUnionParamNames;
@@ -1543,7 +1914,7 @@ public sealed class TraitQueries(SqliteConnection connection, string? aiJsonlPat
         var unionInClause    = string.Join(", ", allUnionParamNames);
         var clusterSumExpr   = string.Join(" + ", clusterScoreExpressions);
         var exactSumExpr     = string.Join(" + ", exactScoreExpressions);
-        var requiredClusters = filter.MatchAllTags ? filter.TagClusters.Count : 1;
+        var requiredClusters = requireAllClusters ? filter.TagClusters.Count : 1;
         cmd.Parameters.AddWithValue("@reqCount", requiredClusters);
 
         cmd.CommandText = $"""

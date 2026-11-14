@@ -19,7 +19,20 @@ public sealed record TraitSearchMatch(
     string TagSource = TraitEntry.SourceAiDetailed,
     string? Category = null,
     bool IsActionableDebt = true,
-    string? ClusterName = null);
+    string? ClusterName = null,
+    int MatchedConceptCount = 0,
+    int TotalRequestedConcepts = 0,
+    IReadOnlyList<string>? MatchedConcepts = null);
+
+/// <summary>
+/// Summarises the repository's local architectural conventions ("local building styles") inferred from <c>search_traits</c> matches:
+/// where similar code lives, how enclosing classes/methods are structured, and recurring companion traits.
+/// </summary>
+public sealed record LocalBuildingStyleSummary(
+    IReadOnlyList<string> CommonDirectories,
+    IReadOnlyList<string> CommonClassConventions,
+    IReadOnlyList<string> CompanionTraits,
+    string Guidance);
 
 /// <summary>
 /// Represents an untagged (or baseline CPU auto-tagged) symbol candidate ready for an AI agent (Gemini, Copilot, Claude) to analyse and enrich with detailed traits.

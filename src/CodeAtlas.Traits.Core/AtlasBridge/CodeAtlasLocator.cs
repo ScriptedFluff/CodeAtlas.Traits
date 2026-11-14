@@ -113,9 +113,21 @@ public static class CodeAtlasLocator
         {
             jsonText = File.ReadAllText(beaconPath);
             beacon   = JsonSerializer.Deserialize(jsonText, LocatorJsonContext.Default.InstallBeaconDto);
-            if (beacon?.CliExecutable is not null && File.Exists(beacon.CliExecutable))
+            if (beacon?.CliExecutable is not null &&
+                File.Exists(beacon.CliExecutable) &&
+                !IsMcpServerExecutable(beacon.CliExecutable))
             {
                 return Path.GetFullPath(beacon.CliExecutable);
+            }
+
+            if (!string.IsNullOrWhiteSpace(beacon?.BaseDirectory) && Directory.Exists(beacon.BaseDirectory))
+            {
+                var exeName          = OperatingSystem.IsWindows() ? "CodeAtlas.exe" : "CodeAtlas";
+                var siblingCliInBase = Path.Combine(beacon.BaseDirectory, exeName);
+                if (File.Exists(siblingCliInBase))
+                {
+                    return Path.GetFullPath(siblingCliInBase);
+                }
             }
         }
         catch
@@ -125,6 +137,13 @@ public static class CodeAtlasLocator
 
         // ── 4. Output / Return ──
         return null;
+    }
+
+    private static bool IsMcpServerExecutable(string filePath)
+    {
+        var fileName = Path.GetFileNameWithoutExtension(filePath);
+        return fileName.EndsWith(".Mcp", StringComparison.OrdinalIgnoreCase) ||
+               fileName.Contains("Mcp", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? TryResolveFromSystemPath()
@@ -178,25 +197,29 @@ public static class CodeAtlasLocator
         exeName = OperatingSystem.IsWindows() ? "CodeAtlas.exe" : "CodeAtlas";
 
         // ── 3. Intent-First Narrative ──
+        string[] siblingFolderNames = ["CodeAtlas3", "CodeAtlas"];
         foreach (var startDir in rootsToSearch)
         {
             var current = new DirectoryInfo(startDir);
             while (current is not null)
             {
-                var siblingRepo = Path.Combine(current.FullName, "CodeAtlas");
-                if (Directory.Exists(siblingRepo))
+                foreach (var folderName in siblingFolderNames)
                 {
-                    var publishCliExe  = Path.Combine(siblingRepo, "publish", "cli", exeName);
-                    var publishRootExe = Path.Combine(siblingRepo, "publish", exeName);
-                    var releaseExe     = Path.Combine(siblingRepo, "src", "CodeAtlas.Cli", "bin", "Release", "net10.0", exeName);
-                    var debugExe       = Path.Combine(siblingRepo, "src", "CodeAtlas.Cli", "bin", "Debug", "net10.0", exeName);
-                    var debugDll       = Path.Combine(siblingRepo, "src", "CodeAtlas.Cli", "bin", "Debug", "net10.0", "CodeAtlas.dll");
+                    var siblingRepo = Path.Combine(current.FullName, folderName);
+                    if (Directory.Exists(siblingRepo))
+                    {
+                        var publishCliExe  = Path.Combine(siblingRepo, "publish", "cli", exeName);
+                        var publishRootExe = Path.Combine(siblingRepo, "publish", exeName);
+                        var releaseExe     = Path.Combine(siblingRepo, "src", "CodeAtlas.Cli", "bin", "Release", "net10.0", exeName);
+                        var debugExe       = Path.Combine(siblingRepo, "src", "CodeAtlas.Cli", "bin", "Debug", "net10.0", exeName);
+                        var debugDll       = Path.Combine(siblingRepo, "src", "CodeAtlas.Cli", "bin", "Debug", "net10.0", "CodeAtlas.dll");
 
-                    if (File.Exists(publishCliExe))  return Path.GetFullPath(publishCliExe);
-                    if (File.Exists(publishRootExe)) return Path.GetFullPath(publishRootExe);
-                    if (File.Exists(releaseExe))     return Path.GetFullPath(releaseExe);
-                    if (File.Exists(debugExe))       return Path.GetFullPath(debugExe);
-                    if (File.Exists(debugDll))       return Path.GetFullPath(debugDll);
+                        if (File.Exists(publishCliExe))  return Path.GetFullPath(publishCliExe);
+                        if (File.Exists(publishRootExe)) return Path.GetFullPath(publishRootExe);
+                        if (File.Exists(releaseExe))     return Path.GetFullPath(releaseExe);
+                        if (File.Exists(debugExe))       return Path.GetFullPath(debugExe);
+                        if (File.Exists(debugDll))       return Path.GetFullPath(debugDll);
+                    }
                 }
                 current = current.Parent;
             }

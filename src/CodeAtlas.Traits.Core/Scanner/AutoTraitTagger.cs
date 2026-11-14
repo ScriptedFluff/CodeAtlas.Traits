@@ -312,12 +312,69 @@ public static class AutoTraitTagger
         {
             AddTagIfNew("accesses_redis", extractedTags, seenTags);
         }
+
+        if (ContainsAny(content, signature, "CommandType.StoredProcedure", "StoredProcedure", "ExecuteStoredProc", "usp_"))
+        {
+            AddTagIfNew("stored_procedure", extractedTags, seenTags);
+        }
     }
 
     private static bool IsExtensionMethod(string content, string signature)
     {
+        if (HasLeadingThisParameterInSignature(signature))
+        {
+            return !signature.Contains("this:", StringComparison.Ordinal);
+        }
+
         return (content.Contains("static ", StringComparison.Ordinal) || signature.Contains("static ", StringComparison.Ordinal)) &&
-               (content.Contains("(this ", StringComparison.Ordinal) || signature.Contains("(this ", StringComparison.Ordinal));
+               HasLeadingThisParameterInSignature(content);
+    }
+
+    private static bool HasLeadingThisParameterInSignature(string declarationText)
+    {
+        // ── 1. Declarations ──
+        int openParenIdx;
+        int cursor;
+
+        // ── 2. Preconditions & Guard Clauses ──
+        if (string.IsNullOrWhiteSpace(declarationText))
+        {
+            return false;
+        }
+
+        openParenIdx = declarationText.IndexOf('(');
+        if (openParenIdx < 0)
+        {
+            return false;
+        }
+
+        // ── 3. Intent-First Narrative ──
+        cursor = openParenIdx + 1;
+        while (cursor < declarationText.Length && char.IsWhiteSpace(declarationText[cursor]))
+        {
+            cursor++;
+        }
+
+        // Skip optional parameter attributes such as ([NotNull] this string value)
+        while (cursor < declarationText.Length && declarationText[cursor] == '[')
+        {
+            var closeBracketIdx = declarationText.IndexOf(']', cursor + 1);
+            if (closeBracketIdx < 0)
+            {
+                break;
+            }
+
+            cursor = closeBracketIdx + 1;
+            while (cursor < declarationText.Length && char.IsWhiteSpace(declarationText[cursor]))
+            {
+                cursor++;
+            }
+        }
+
+        // ── 4. Output / Return ──
+        return cursor + 5 <= declarationText.Length &&
+               string.CompareOrdinal(declarationText, cursor, "this", 0, 4) == 0 &&
+               char.IsWhiteSpace(declarationText[cursor + 4]);
     }
 
     private static bool ContainsAny(string content, string signature, params string[] needles)

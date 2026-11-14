@@ -420,9 +420,7 @@ public static class CommandFactory
 
         // ── 2. Intent-First Narrative ──
         workspace = WorkspacePathResolver.ResolveWorkspace(repoRoot, customDbDir);
-        tagArray  = string.IsNullOrWhiteSpace(rawTags)
-            ? []
-            : rawTags.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        tagArray  = ParseCliTagList(rawTags);
 
         (resolvedLanguage, capabilityTags) = LanguageNormalizer.SplitTagsAndLanguage(tagArray, language);
 
@@ -436,7 +434,7 @@ public static class CommandFactory
 
         using var db = new TraitsDb(workspace.TraitsDbPath);
         db.Migrate();
-        matches = db.Traits.SearchByTraits(capabilityTags, resolvedLanguage, symbolType, onlyUtilities, matchAllTags: true, limit: limit);
+        matches = db.Traits.SearchByTraits(capabilityTags, resolvedLanguage, symbolType, onlyUtilities, matchAllTags: false, limit: limit);
 
         // ── 3. Output / Return ──
         if (isJson)
@@ -445,13 +443,55 @@ public static class CommandFactory
             return;
         }
 
+        if (matches.Count > 0)
+        {
+            var styles = CodeAtlas.Traits.Core.Db.Queries.TraitQueries.BuildLocalBuildingStyleSummary(matches, capabilityTags);
+            if (styles.CommonDirectories.Count > 0)
+            {
+                Console.WriteLine($"Local Building Styles — Directories: {string.Join(", ", styles.CommonDirectories)}");
+            }
+            if (styles.CommonClassConventions.Count > 0)
+            {
+                Console.WriteLine($"Local Building Styles — Classes:     {string.Join(", ", styles.CommonClassConventions)}");
+            }
+            Console.WriteLine();
+        }
+
         foreach (var m in matches)
         {
-            var utilBadge = m.IsUtility ? " [UTILITY]" : "";
-            Console.WriteLine($"[{m.SymbolType}] {m.SymbolName} ({m.Language}) | {m.FilePath}:{m.StartLine}-{m.EndLine}{utilBadge}");
+            var utilBadge    = m.IsUtility ? " [UTILITY]" : "";
+            var conceptBadge = m.TotalRequestedConcepts > 0
+                ? $" [{m.MatchedConceptCount}/{m.TotalRequestedConcepts}: {string.Join(", ", m.MatchedConcepts ?? [])}]"
+                : "";
+            var qualifiedName = string.IsNullOrWhiteSpace(m.ClassName) ? m.SymbolName : $"{m.ClassName}:{m.SymbolName}";
+            Console.WriteLine($"[{m.SymbolType}] {qualifiedName} ({m.Language}){conceptBadge} | {m.FilePath}:{m.StartLine}-{m.EndLine}{utilBadge}");
             Console.WriteLine($"  Tags:    {string.Join(", ", m.Tags)}");
             Console.WriteLine($"  Summary: {m.Summary}");
         }
+    }
+
+    private static string[] ParseCliTagList(string? rawTags)
+    {
+        if (string.IsNullOrWhiteSpace(rawTags))
+        {
+            return [];
+        }
+
+        var trimmed = rawTags.Trim().TrimStart('[').TrimEnd(']');
+        if (trimmed.Contains(',') || trimmed.Contains(';'))
+        {
+            return trimmed
+                .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(t => t.Trim('"', '\'', ' '))
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .ToArray();
+        }
+
+        return trimmed
+            .Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(t => t.Trim('"', '\'', ' '))
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .ToArray();
     }
 
     private static async Task ExecuteSimilarCommandAsync(

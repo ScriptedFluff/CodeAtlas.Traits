@@ -1172,4 +1172,126 @@ public sealed class TraitQueriesTests : IDisposable
         Assert.Single(pathFilteredBatch);
         Assert.Equal("SetHashEntryAsync", pathFilteredBatch[0].SymbolName);
     }
+
+    [Fact]
+    public void SearchByTraits_WithMultiConceptDiscoveryQuery_RanksPartialMatchesAndInfersLocalBuildingStyles()
+    {
+        // ── 1. Declarations ──
+        IReadOnlyList<SymbolSnapshot> snapshots;
+        IReadOnlyList<TraitEntry> entries;
+        IReadOnlyList<TraitSearchMatch> matches;
+        LocalBuildingStyleSummary buildingStyles;
+
+        // ── 2. Intent-First Narrative ──
+        snapshots =
+        [
+            new SymbolSnapshot
+            {
+                SymbolName       = "RefreshCustomerCacheFromStoredProcAsync",
+                SymbolType       = "Method",
+                ClassName        = "CustomerCacheRefresher",
+                Language         = "csharp",
+                FilePath         = "src/Infrastructure/Caching/CustomerCacheRefresher.cs",
+                StartLine        = 20,
+                EndLine          = 55,
+                StartByte        = 100,
+                EndByte          = 900,
+                Signature        = "Task RefreshCustomerCacheFromStoredProcAsync(int customerId, CancellationToken ct)",
+                BodyHash         = "hash_customer_cache_refresher",
+                IsTrivial        = false,
+                StatementCount   = 12
+            },
+            new SymbolSnapshot
+            {
+                SymbolName       = "ExecuteCustomerStoredProcAsync",
+                SymbolType       = "Method",
+                ClassName        = "StoredProcRepository",
+                Language         = "csharp",
+                FilePath         = "src/Data/Repositories/StoredProcRepository.cs",
+                StartLine        = 15,
+                EndLine          = 40,
+                StartByte        = 100,
+                EndByte          = 600,
+                Signature        = "Task<CustomerDto> ExecuteCustomerStoredProcAsync(string procName, CancellationToken ct)",
+                BodyHash         = "hash_stored_proc_repo",
+                IsTrivial        = false,
+                StatementCount   = 8
+            },
+            // Untagged / baseline auto-cpu symbol matching 1/3 ('redis') via structural tag & class name
+            new SymbolSnapshot
+            {
+                SymbolName       = "GetUserFromRedisAsync",
+                SymbolType       = "Method",
+                ClassName        = "UserLookupCache",
+                Language         = "csharp",
+                FilePath         = "src/Infrastructure/Caching/UserLookupCache.cs",
+                StartLine        = 10,
+                EndLine          = 28,
+                StartByte        = 100,
+                EndByte          = 450,
+                Signature        = "Task<UserDto?> GetUserFromRedisAsync(string userKey)",
+                BodyHash         = "hash_user_lookup_cache",
+                IsTrivial        = false,
+                StatementCount   = 6
+            }
+        ];
+
+        entries =
+        [
+            new TraitEntry
+            {
+                BodyHash  = "hash_customer_cache_refresher",
+                Summary   = "Executes a SQL stored procedure and refreshes the Redis hash cache entry.",
+                IsUtility = false,
+                Tags      = ["accesses_redis", "sql", "stored_procedure", "cancellable_async"],
+                TagSource = TraitEntry.SourceAiDetailed
+            },
+            new TraitEntry
+            {
+                BodyHash  = "hash_stored_proc_repo",
+                Summary   = "Executes a Dapper SQL stored procedure with retry logic.",
+                IsUtility = true,
+                Tags      = ["sql", "stored_procedure", "has_retry_logic", "cancellable_async"],
+                TagSource = TraitEntry.SourceAiDetailed
+            },
+            new TraitEntry
+            {
+                BodyHash  = "hash_user_lookup_cache",
+                Summary   = "Auto-indexed method 'GetUserFromRedisAsync'.",
+                IsUtility = false,
+                Tags      = ["accesses_redis"],
+                TagSource = TraitEntry.SourceAutoCpu
+            }
+        ];
+
+        _db.Traits.ReplaceSymbolSnapshots(snapshots);
+        _db.Traits.SaveTraitEntries(entries);
+
+        matches = _db.Traits.SearchByTraits(["redis", "sql", "stored procedure"], matchAllTags: false);
+        buildingStyles = CodeAtlas.Traits.Core.Db.Queries.TraitQueries.BuildLocalBuildingStyleSummary(
+            matches,
+            ["redis", "sql", "stored procedure"]);
+
+        // ── 3. Output / Assertions ──
+        Assert.Equal(3, matches.Count);
+
+        // 1st match: 3/3 concepts (redis + sql + stored_procedure)
+        Assert.Equal("CustomerCacheRefresher", matches[0].ClassName);
+        Assert.Equal(3, matches[0].MatchedConceptCount);
+        Assert.Equal(3, matches[0].TotalRequestedConcepts);
+
+        // 2nd match: 2/3 concepts (sql + stored_procedure)
+        Assert.Equal("StoredProcRepository", matches[1].ClassName);
+        Assert.Equal(2, matches[1].MatchedConceptCount);
+
+        // 3rd match: 1/3 concept (redis)
+        Assert.Equal("UserLookupCache", matches[2].ClassName);
+        Assert.Equal(1, matches[2].MatchedConceptCount);
+
+        // Local Building Styles summary surfaces the common directory & class conventions
+        Assert.Contains(buildingStyles.CommonDirectories, d => d.StartsWith("src/Infrastructure/Caching (2)", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("CustomerCacheRefresher", buildingStyles.CommonClassConventions);
+        Assert.Contains("StoredProcRepository", buildingStyles.CommonClassConventions);
+        Assert.Contains("cancellable_async", buildingStyles.CompanionTraits);
+    }
 }
