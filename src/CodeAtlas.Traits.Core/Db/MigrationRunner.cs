@@ -37,6 +37,11 @@ public static class MigrationRunner
         {
             ApplyMigration(connection, 3, M003_ContractWeightAndSemanticVerdicts);
         }
+
+        if (currentVersion < 4)
+        {
+            ApplyMigration(connection, 4, M004_StructuralHash);
+        }
     }
 
     private static void EnsureMigrationsTable(SqliteConnection connection)
@@ -117,6 +122,12 @@ public static class MigrationRunner
         ALTER TABLE trait_entries ADD COLUMN category TEXT;
         ALTER TABLE trait_entries ADD COLUMN is_actionable_debt INTEGER NOT NULL DEFAULT 1;
         ALTER TABLE trait_entries ADD COLUMN cluster_name TEXT;
+        DELETE FROM symbol_snapshots;
+        """;
+
+    private const string M004_StructuralHash = """
+        ALTER TABLE symbol_snapshots ADD COLUMN structural_hash TEXT NOT NULL DEFAULT '';
+        CREATE INDEX IF NOT EXISTS idx_snapshots_structural_hash ON symbol_snapshots(structural_hash);
         DELETE FROM symbol_snapshots;
         """;
 }

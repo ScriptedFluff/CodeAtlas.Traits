@@ -915,4 +915,154 @@ public sealed class TraitQueriesTests : IDisposable
         Assert.Contains("has_retry_logic", generated.Tags);
         Assert.DoesNotContain("string", generated.Tags);
     }
+
+    [Fact]
+    public void AiTraitsJsonlSync_AutomaticallyExportsAndReimportsVerifiedAiTraits()
+    {
+        // ── 1. Declarations ──
+        string expectedJsonlPath;
+        string secondDbPath;
+        TraitEntry aiEntry;
+        TraitEntry autoEntry;
+        IReadOnlyList<TraitSearchMatch> matchesAfterReimport;
+
+        // ── 2. Intent-First Narrative ──
+        expectedJsonlPath = AiTraitsJsonlStore.ResolveJsonlPathFromDbPath(_dbPath)!;
+        secondDbPath      = Path.Combine(Path.GetDirectoryName(_dbPath)!, "fresh_traits.db");
+
+        aiEntry = new TraitEntry
+        {
+            BodyHash         = "hash_retry_backoff",
+            Summary          = "Verified AI retry policy with exponential backoff.",
+            IsUtility        = true,
+            Tags             = ["retry_backoff", "polly"],
+            TagSource        = TraitEntry.SourceAiDetailed,
+            Category         = "pattern",
+            IsActionableDebt = false,
+            ClusterName      = "ResilienceHelpers"
+        };
+
+        autoEntry = new TraitEntry
+        {
+            BodyHash  = "hash_parse_csv",
+            Summary   = "Baseline auto-cpu trait.",
+            IsUtility = false,
+            Tags      = ["csv_parse"],
+            TagSource = TraitEntry.SourceAutoCpu
+        };
+
+        _db.Traits.SaveTraitEntries([aiEntry, autoEntry]);
+
+        // Simulate deleting traits.db and opening a fresh DB in the same .codeatlas directory where traits.ai.jsonl exists
+        using var freshDb = new TraitsDb(secondDbPath);
+        freshDb.Migrate();
+        freshDb.Traits.ReplaceSymbolSnapshots([
+            new SymbolSnapshot
+            {
+                SymbolName = "RetryWithBackoffAsync",
+                SymbolType = "Method",
+                ClassName  = "RetryService",
+                Language   = "csharp",
+                FilePath   = "src/RetryService.cs",
+                StartLine  = 10,
+                EndLine    = 30,
+                StartByte  = 100,
+                EndByte    = 500,
+                BodyHash   = "hash_retry_backoff",
+                IsTrivial  = false
+            }
+        ]);
+        matchesAfterReimport = freshDb.Traits.SearchByTraits(["retry_backoff"], useThesaurus: false);
+
+        // ── 3. Output / Assertions ──
+        Assert.True(File.Exists(expectedJsonlPath));
+        Assert.Single(matchesAfterReimport);
+        Assert.Equal("ai", matchesAfterReimport[0].TagSource);
+        Assert.Equal("pattern", matchesAfterReimport[0].Category);
+        Assert.False(matchesAfterReimport[0].IsActionableDebt);
+        Assert.Equal("ResilienceHelpers", matchesAfterReimport[0].ClusterName);
+    }
+
+    [Fact]
+    public void StructuralNormaliser_CatchesRenamedClonesWhilePreservingServiceCalls()
+    {
+        // ── 1. Declarations ──
+        string dtoSkeletonA;
+        string dtoSkeletonB;
+        string methodCloneA;
+        string methodCloneB;
+        string serviceMethodDoc;
+        string serviceMethodInv;
+        string dtoStructHashA;
+        string dtoStructHashB;
+        string methodStructHashA;
+        string methodStructHashB;
+        string docStructHash;
+        string invStructHash;
+        IReadOnlyList<DuplicateBodyGroup> duplicates;
+
+        // ── 2. Intent-First Narrative ──
+        dtoSkeletonA = "public class PerformanceResultStub : BaseStub\n{\n    string Code { get; set; }\n    decimal Value { get; set; }\n}";
+        dtoSkeletonB = "public class ReportResultStub : BaseStub\n{\n    string Code { get; set; }\n    decimal Value { get; set; }\n}";
+
+        methodCloneA = "public decimal CalculateFee(decimal amount, int tier) { var rate = 0.05m; if (tier > 1) { return amount * rate; } return amount; }";
+        methodCloneB = "public decimal ComputeFee(decimal totalValue, int level) { var factor = 0.25m; if (level > 2) { return totalValue * factor; } return totalValue; }";
+
+        serviceMethodDoc = "public async Task UpdateAsync(int id) { var entity = await _documentService.GetAsync(id); await _documentService.UpdateAsync(entity); }";
+        serviceMethodInv = "public async Task UpdateAsync(int id) { var entity = await _investorService.GetAsync(id); await _investorService.UpdateAsync(entity); }";
+
+        dtoStructHashA    = CodeAtlas.Traits.Core.Scanner.StructuralNormaliser.NormaliseClassSkeleton("PerformanceResultStub", dtoSkeletonA).ComputeContentHash();
+        dtoStructHashB    = CodeAtlas.Traits.Core.Scanner.StructuralNormaliser.NormaliseClassSkeleton("ReportResultStub", dtoSkeletonB).ComputeContentHash();
+        methodStructHashA = CodeAtlas.Traits.Core.Scanner.StructuralNormaliser.NormaliseMethodBody("CalculateFee", methodCloneA).ComputeContentHash();
+        methodStructHashB = CodeAtlas.Traits.Core.Scanner.StructuralNormaliser.NormaliseMethodBody("ComputeFee", methodCloneB).ComputeContentHash();
+        docStructHash     = CodeAtlas.Traits.Core.Scanner.StructuralNormaliser.NormaliseMethodBody("UpdateAsync", serviceMethodDoc).ComputeContentHash();
+        invStructHash     = CodeAtlas.Traits.Core.Scanner.StructuralNormaliser.NormaliseMethodBody("UpdateAsync", serviceMethodInv).ComputeContentHash();
+
+        _db.Traits.ReplaceSymbolSnapshots([
+            new SymbolSnapshot
+            {
+                SymbolName        = "PerformanceResultStub",
+                SymbolType        = "Class",
+                Language          = "csharp",
+                FilePath          = "Models/PerformanceQuery.cs",
+                StartLine         = 10,
+                EndLine           = 20,
+                StartByte         = 100,
+                EndByte           = 300,
+                BodyHash          = "body_perf_stub",
+                StructuralHash    = dtoStructHashA,
+                IsTrivial         = false,
+                HasExecutableBody = true,
+                StatementCount    = 2
+            },
+            new SymbolSnapshot
+            {
+                SymbolName        = "ReportResultStub",
+                SymbolType        = "Class",
+                Language          = "csharp",
+                FilePath          = "Models/ReportQuery.cs",
+                StartLine         = 10,
+                EndLine           = 20,
+                StartByte         = 100,
+                EndByte           = 300,
+                BodyHash          = "body_report_stub",
+                StructuralHash    = dtoStructHashB,
+                IsTrivial         = false,
+                HasExecutableBody = true,
+                StatementCount    = 2
+            }
+        ]);
+
+        duplicates = _db.Traits.FindExactBodyDuplicates("csharp", includeRenamedClones: true);
+
+        // ── 3. Output / Assertions ──
+        Assert.Equal(dtoStructHashA, dtoStructHashB);
+        Assert.Equal(methodStructHashA, methodStructHashB);
+        Assert.NotEqual(docStructHash, invStructHash);
+
+        Assert.Single(duplicates);
+        Assert.True(duplicates[0].IsRenamedClone);
+        Assert.Equal(dtoStructHashA, duplicates[0].StructuralHash);
+        Assert.Equal(2, duplicates[0].OccurrenceCount);
+    }
 }

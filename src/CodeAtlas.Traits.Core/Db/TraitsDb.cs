@@ -9,6 +9,7 @@ namespace CodeAtlas.Traits.Core.Db;
 public sealed class TraitsDb : IDisposable
 {
     private readonly SqliteConnection _connection;
+    private readonly bool _readOnly;
 
     public SqliteConnection Connection => _connection;
     public string DbFilePath { get; }
@@ -19,9 +20,11 @@ public sealed class TraitsDb : IDisposable
         // ── 1. Declarations ──
         string? directory;
         string connectionString;
+        string? aiJsonlPath;
 
         // ── 2. Preconditions & Guard Clauses ──
         DbFilePath = dbPath;
+        _readOnly  = readOnly;
         if (!readOnly)
         {
             directory = Path.GetDirectoryName(dbPath);
@@ -47,12 +50,17 @@ public sealed class TraitsDb : IDisposable
             pragma.ExecuteNonQuery();
         }
 
-        Traits = new TraitQueries(_connection);
+        aiJsonlPath = AiTraitsJsonlStore.ResolveJsonlPathFromDbPath(dbPath);
+        Traits      = new TraitQueries(_connection, aiJsonlPath);
     }
 
     public void Migrate()
     {
         MigrationRunner.Migrate(_connection);
+        if (!_readOnly)
+        {
+            Traits.ImportAiTraitsFromJsonlIfPresent();
+        }
     }
 
     public void Dispose()

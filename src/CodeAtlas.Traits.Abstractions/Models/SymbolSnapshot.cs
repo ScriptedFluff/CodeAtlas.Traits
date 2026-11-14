@@ -18,6 +18,7 @@ public sealed record SymbolSnapshot
     public string? Signature { get; init; }
     public string? DocComment { get; init; }
     public required string BodyHash { get; init; }
+    public string StructuralHash { get; init; } = string.Empty;
     public bool IsTrivial { get; init; }
     public bool HasExecutableBody { get; init; } = true;
     public int StatementCount { get; init; } = 1;

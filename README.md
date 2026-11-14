@@ -20,10 +20,10 @@ AI agents and developers frequently invent duplicate private utility methods bec
 `CodeAtlas.Traits` works alongside `CodeAtlas` as an AI-agnostic MCP server and CLI tool using a **Two-Tier Intelligence Model**:
 - **Tier 1 — Fast Local CPU Recall**: Pulls AST symbols from `CodeAtlas`, computes content-addressable `body_hash` values, seeds zero-cost structural traits, and indexes CPU-only ONNX semantic embeddings (`all-MiniLM-L6-v2` Int8) at zero API token cost.
 - **Tier 2 — High-Level AI Refinement (MCP)**: Connected AI companions (Antigravity / Gemini, GitHub Copilot, Claude) evaluate candidate clusters, enrich methods with behavioural traits, and gatekeep newly authored code against existing utilities and subsystem patterns.
-- **Strict Separation**: `CodeAtlas` owns `.codeatlas/atlas.db` (deterministic AST ground truth); `CodeAtlas.Traits` owns `.codeatlas/traits.db` (semantic traits, embeddings, and duplication clusters).
-- **Content-Addressable `body_hash`**:
-  - **Methods & Functions**: Hashed on their whitespace-normalised AST byte slice (`StartByte..EndByte`), separating executable bodies from interface/abstract contract signatures. Survives full re-indexes, formatting edits, and file moves.
-  - **Classes**: Hashed strictly on their contract skeleton (inheritance/interfaces, constructors, and non-private member signatures)—editing private implementation details never invalidates class traits.
+- **Strict Separation**: `CodeAtlas` owns `.codeatlas/atlas.db` (deterministic AST ground truth); `CodeAtlas.Traits` owns `.codeatlas/traits.db` (semantic traits, embeddings, and duplication clusters) and automatically mirrors verified `'ai'` traits to a Git-trackable `.codeatlas/traits.ai.jsonl` file.
+- **Content-Addressable `body_hash` & Type-2 `structural_hash`**:
+  - **Methods & Functions**: Hashed on their whitespace-normalised AST byte slice (`StartByte..EndByte`), separating executable bodies from interface/abstract contract signatures. Also computes a Type-2 `structural_hash` (normalising parameter and local variable names while preserving external service/member calls) to catch copy-pasted methods with renamed locals.
+  - **Classes**: Hashed strictly on their contract skeleton (inheritance/interfaces, constructors, and non-private member signatures)—editing private implementation details never invalidates class traits. Also computes a Type-2 `structural_hash` (`class $CLASS`) to catch renamed DTO/model clones with identical properties.
 - **Timeout Guard (`completeOnlyResponse`)**: Defaults to `completeOnlyResponse = false` so cold scans taking longer than 1.5s return `"status": "scanning_in_progress"` immediately while continuing in the background, ensuring AI agents never assume the server timed out.
 
 ---

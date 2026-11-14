@@ -223,3 +223,12 @@ Example custom dictionary pack (`.codeatlas/dictionaries/custom.json`):
   ]
 }
 ```
+
+---
+
+## 7. Git-Trackable AI Traits Sync (`.codeatlas/traits.ai.jsonl`)
+
+While `.codeatlas/traits.db` is a local SQLite database (typically ignored by Git), `CodeAtlas.Traits` automatically mirrors all verified `tag_source = 'ai'` traits to a compact, deterministic, sorted `.codeatlas/traits.ai.jsonl` file keyed by `body_hash`.
+- **Automatic Export**: Whenever `save_traits` or `tag_symbol` saves a verified `'ai'` trait, `.codeatlas/traits.ai.jsonl` is updated automatically.
+- **Automatic Re-Import**: Whenever `traits.db` is opened or migrated on a new machine (or after deleting `traits.db`), any `'ai'` entries in `.codeatlas/traits.ai.jsonl` are automatically imported into `traits.db`.
+- Commit `.codeatlas/traits.ai.jsonl` to Git so your team and CI pipelines share verified semantic traits and architectural verdicts without re-spending LLM tokens.

@@ -123,6 +123,7 @@ public static class BodyHasher
         string extractedContent;
         string normalisedForHash;
         string bodyHash;
+        string structuralHash;
         bool hasExecutableBody;
         int statementCount;
         bool isTrivial;
@@ -148,6 +149,7 @@ public static class BodyHasher
 
         normalisedForHash  = extractedContent.NormaliseWhitespace();
         bodyHash           = normalisedForHash.ComputeContentHash();
+        structuralHash     = StructuralNormaliser.ComputeStructuralHash(symbol, extractedContent, bodyHash);
         hasExecutableBody  = TrivialSymbolFilter.HasExecutableBody(symbol, extractedContent, fileSymbols);
         statementCount     = TrivialSymbolFilter.EstimateStatementCount(symbol, extractedContent, hasExecutableBody);
         isTrivial          = TrivialSymbolFilter.IsTrivialSymbol(symbol, extractedContent, hasExecutableBody);
@@ -168,6 +170,7 @@ public static class BodyHasher
             Signature         = symbol.Signature,
             DocComment        = symbol.DocComment,
             BodyHash          = bodyHash,
+            StructuralHash    = structuralHash,
             IsTrivial         = isTrivial,
             HasExecutableBody = hasExecutableBody,
             StatementCount    = statementCount,

@@ -50,4 +50,7 @@ Desktop.ini
 outputs
 
 # CodeAtlas local index & settings
-.codeatlas/
+.codeatlas/*
+!.codeatlas/traits.ai.jsonl
+!.codeatlas/settings.json
+!.codeatlas/dictionaries/

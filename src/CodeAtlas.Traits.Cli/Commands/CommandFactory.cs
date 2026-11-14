@@ -500,7 +500,7 @@ public static class CommandFactory
         foreach (var sim in result.SimilarMatches)
         {
             var cand          = sim.MatchedSymbol;
-            var dupBadge      = sim.IsExactBodyDuplicate ? " [EXACT DUPLICATE]" : "";
+            var dupBadge      = sim.IsExactBodyDuplicate ? " [EXACT DUPLICATE]" : (sim.IsRenamedClone ? " [RENAMED CLONE]" : "");
             var qualifiedCand = string.IsNullOrWhiteSpace(cand.ClassName) ? cand.SymbolName : $"{cand.ClassName}:{cand.SymbolName}";
             Console.WriteLine($"  -> [{sim.OverallSimilarityScore}% match]{dupBadge} [{cand.SymbolType}] {qualifiedCand} | {cand.FilePath}:L{cand.StartLine}-{cand.EndLine} ({sim.CandidateLineCount} lines, {sim.SizeSimilarityPercent}% size similarity)");
             Console.WriteLine($"     Shared concepts: {string.Join(", ", sim.SharedConcepts)} | All tags: {string.Join(", ", cand.Tags)}");
@@ -588,7 +588,8 @@ public static class CommandFactory
         foreach (var g in groups)
         {
             var contractBadge = !g.HasExecutableBody ? " [CONTRACT SIGNATURE]" : "";
-            Console.WriteLine($"BodyHash {g.BodyHash} ({g.OccurrenceCount} occurrences, weight={g.StatementCount}){contractBadge}:");
+            var cloneBadge    = g.IsRenamedClone ? $" [RENAMED CLONE: {g.StructuralHash}]" : "";
+            Console.WriteLine($"BodyHash {g.BodyHash} ({g.OccurrenceCount} occurrences, weight={g.StatementCount}){contractBadge}{cloneBadge}:");
             foreach (var loc in g.Locations)
             {
                 Console.WriteLine($"  - [{loc.SymbolType}] {loc.SymbolName} | {loc.FilePath}:{loc.StartLine}-{loc.EndLine}");

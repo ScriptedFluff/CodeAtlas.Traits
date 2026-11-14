@@ -54,7 +54,9 @@ public sealed record DuplicateBodyGroup(
     int StatementCount = 1,
     string? Category = null,
     bool IsActionableDebt = true,
-    string? ClusterName = null);
+    string? ClusterName = null,
+    bool IsRenamedClone = false,
+    string? StructuralHash = null);
 
 /// <summary>
 /// Represents a file-pair or subsystem cluster where multiple sibling symbols in <see cref="PrimaryFilePath"/>
@@ -119,7 +121,8 @@ public sealed record LocationSimilarityMatch(
     int CandidateLineCount,
     int SizeSimilarityPercent,
     int OverallSimilarityScore,
-    int EmbeddingSimilarityPercent = 0);
+    int EmbeddingSimilarityPercent = 0,
+    bool IsRenamedClone = false);
 
 /// <summary>
 /// Result of querying for symbols similar to a specific symbol (<c>MyNamespace.MyClass:MyMethod</c>) or <c>file:line</c> location (<c>MyClass.cs:L35</c>).
