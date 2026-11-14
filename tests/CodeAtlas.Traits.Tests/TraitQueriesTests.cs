@@ -1065,4 +1065,111 @@ public sealed class TraitQueriesTests : IDisposable
         Assert.Equal(dtoStructHashA, duplicates[0].StructuralHash);
         Assert.Equal(2, duplicates[0].OccurrenceCount);
     }
+
+    [Fact]
+    public void GetUntaggedBatch_PrioritisesHighValueUtilityIslandsAndSupportsPathFilter()
+    {
+        // ── 1. Declarations ──
+        IReadOnlyList<UntaggedSymbolCandidate> defaultBatch;
+        IReadOnlyList<UntaggedSymbolCandidate> onlyUtilitiesBatch;
+        IReadOnlyList<UntaggedSymbolCandidate> pathFilteredBatch;
+
+        // ── 2. Intent-First Narrative ──
+        _db.Traits.ReplaceSymbolSnapshots([
+            // Alphabetically first, but a non-utility domain DbContext method
+            new SymbolSnapshot
+            {
+                SymbolName        = "OnModelCreating",
+                SymbolType        = "Method",
+                ClassName         = "CleverEntityDbContext",
+                Language          = "csharp",
+                FilePath          = "Clever.Adviser.Data/CleverEntityDbContext.cs",
+                StartLine         = 10,
+                EndLine           = 60,
+                StartByte         = 100,
+                EndByte           = 1200,
+                BodyHash          = "hash_db_context",
+                IsTrivial         = false,
+                HasExecutableBody = true,
+                StatementCount    = 20
+            },
+            // Static helper inside a unit test file (should NOT be treated as a production utility)
+            new SymbolSnapshot
+            {
+                SymbolName        = "CreateRetryTestMock",
+                SymbolType        = "Method",
+                ClassName         = "RetryAsyncTests",
+                Language          = "csharp",
+                FilePath          = "Clever.Adviser.Tests/Services/RetryAsyncTests.cs",
+                StartLine         = 10,
+                EndLine           = 25,
+                StartByte         = 100,
+                EndByte           = 400,
+                Signature         = "private static Mock<IRetryService> CreateRetryTestMock()",
+                ExtractedContent  = "private static Mock<IRetryService> CreateRetryTestMock() { return new Mock<IRetryService>(); }",
+                BodyHash          = "hash_test_mock_helper",
+                IsTrivial         = false,
+                HasExecutableBody = true,
+                StatementCount    = 5
+            },
+            // High-value utility extension method (smaller weight)
+            new SymbolSnapshot
+            {
+                SymbolName        = "SetHashEntryAsync",
+                SymbolType        = "Method",
+                ClassName         = "Extensions",
+                Language          = "csharp",
+                FilePath          = "Clever.Adviser.Services/Extensions/RedisExtensions.cs",
+                StartLine         = 40,
+                EndLine           = 48,
+                StartByte         = 400,
+                EndByte           = 600,
+                Signature         = "public static Task SetHashEntryAsync(this IRedisCacheActions redis, string key)",
+                ExtractedContent  = "public static Task SetHashEntryAsync(this IRedisCacheActions redis, string key) { return Task.CompletedTask; }",
+                BodyHash          = "hash_set_hash_util",
+                IsTrivial         = false,
+                HasExecutableBody = true,
+                StatementCount    = 2
+            },
+            // High-value utility extension method (larger weight - should rank #1!)
+            new SymbolSnapshot
+            {
+                SymbolName        = "GetDisplayName",
+                SymbolType        = "Method",
+                ClassName         = "EnumExtensions",
+                Language          = "csharp",
+                FilePath          = "Clever.Adviser.Web/Shared/Utils/EnumExtensions.cs",
+                StartLine         = 12,
+                EndLine           = 42,
+                StartByte         = 100,
+                EndByte           = 900,
+                Signature         = "public static string GetDisplayName(this Enum value)",
+                ExtractedContent  = "public static string GetDisplayName(this Enum value) { return value.ToString(); }",
+                BodyHash          = "hash_display_name_util",
+                IsTrivial         = false,
+                HasExecutableBody = true,
+                StatementCount    = 13
+            }
+        ]);
+
+        defaultBatch       = _db.Traits.GetUntaggedBatch("csharp", batchSize: 10);
+        onlyUtilitiesBatch = _db.Traits.GetUntaggedBatch("csharp", batchSize: 10, onlyUtilities: true);
+        pathFilteredBatch  = _db.Traits.GetUntaggedBatch("csharp", batchSize: 10, pathFilter: "**/Extensions/**");
+
+        // ── 3. Output / Assertions ──
+        Assert.Equal(4, defaultBatch.Count);
+        // The two production utility methods come first, ordered by StatementCount DESC (GetDisplayName -> SetHashEntryAsync)
+        Assert.Equal("GetDisplayName", defaultBatch[0].SymbolName);
+        Assert.True(defaultBatch[0].IsUtility);
+        Assert.Equal("SetHashEntryAsync", defaultBatch[1].SymbolName);
+        Assert.True(defaultBatch[1].IsUtility);
+        // The test static helper is NOT flagged as a production utility
+        Assert.DoesNotContain(defaultBatch, c => c.SymbolName == "CreateRetryTestMock" && c.IsUtility);
+
+        Assert.Equal(2, onlyUtilitiesBatch.Count);
+        Assert.All(onlyUtilitiesBatch, c => Assert.True(c.IsUtility));
+
+        Assert.Single(pathFilteredBatch);
+        Assert.Equal("SetHashEntryAsync", pathFilteredBatch[0].SymbolName);
+    }
 }

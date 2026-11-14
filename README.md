@@ -74,8 +74,9 @@ CodeAtlas.Traits tag MyNamespace.MyClass:MyMethod --tags "retry,backoff,jitter,p
 CodeAtlas.Traits model status
 CodeAtlas.Traits model download
 
-# List untagged non-trivial symbols
+# List untagged non-trivial symbols (prioritises High-Value Utility Islands first)
 CodeAtlas.Traits untagged --lang csharp --limit 25
+CodeAtlas.Traits untagged --lang csharp --utility --path "**/Extensions/**"
 
 # Find exact duplicate method bodies and Subsystem Duplication Clusters
 CodeAtlas.Traits duplicates --lang csharp

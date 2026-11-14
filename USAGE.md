@@ -90,9 +90,11 @@ CodeAtlas.Traits tag MyNamespace.MyClass:MyMethod `
 ```
 
 ### 2.5 List Untagged / Baseline-Tagged Symbols (`untagged`)
-Lists non-trivial symbols awaiting detailed AI tagging (deduplicated by `body_hash`):
+Lists non-trivial symbols awaiting detailed AI tagging (deduplicated by `body_hash`). By default, **High-Value Utility Islands** (`*Extensions*`, `*Utilities*`, `*Helpers*`, `*Common*`, and non-test `static` methods) are prioritised first and ordered by cognitive statement weight:
 ```powershell
 CodeAtlas.Traits untagged --lang csharp --limit 25
+CodeAtlas.Traits untagged --lang csharp --utility
+CodeAtlas.Traits untagged --lang csharp --path "**/Extensions/**"
 CodeAtlas.Traits untagged --lang csharp --json
 ```
 

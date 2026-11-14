@@ -28,6 +28,7 @@ public sealed class GetUntaggedBatchTool(
     [McpServerTool(Name = "get_untagged_batch")]
     [Description("""
         Retrieves a batch of untagged (or baseline CPU auto-tagged) non-trivial classes, methods, and functions (deduplicated by content-addressable body_hash) that need detailed AI capability and technology tags.
+        By default, prioritises 'High-Value Utility Islands' (*Extensions*, *Utilities*, *Helpers*, *Common*, and non-test static methods) ordered by cognitive weight so shared utilities are tagged first.
         Classes are presented as compact contract skeletons (inheritance, constructors, and non-private method signatures only).
         After analysing the returned candidates, pass their body_hash, tags, summary, and isUtility flag to 'save_traits'.
         """)]
@@ -35,6 +36,8 @@ public sealed class GetUntaggedBatchTool(
         [Description("Optional: filter untagged symbols by language (e.g. csharp, typescript, powershell).")] string? language = null,
         [Description("Optional: number of untagged symbols to fetch in this batch (default 25, max 100).")] int batchSize = 25,
         [Description("Optional: if true (default), also includes symbols that only have baseline CPU auto-tags ('auto-cpu') so Gemini/Copilot can enrich them with detailed traits.")] bool includeAutoTagged = true,
+        [Description("Optional: glob or substring filter for file paths or class names (e.g. '**/Extensions/**', '*Utilities*', 'Helpers').")] string? pathFilter = null,
+        [Description("Optional: if true, returns only high-value utility/extension/helper methods and classes.")] bool onlyUtilities = false,
         [Description("Optional: if true, triggers a fresh CodeAtlas delta scan before fetching untagged symbols.")] bool refreshScan = false,
         [Description("Optional: if false (default), returns early with 'scanning_in_progress' if a cold scan takes >1.5s. Set true to wait until scanning completes.")] bool completeOnlyResponse = false,
         [Description("Optional: target repository/workspace directory (defaults to active workspace).")] string? targetDirectory = null,
@@ -76,8 +79,14 @@ public sealed class GetUntaggedBatchTool(
         using var db = new TraitsDb(workspace.TraitsDbPath);
         db.Migrate();
 
-        candidates = db.Traits.GetUntaggedBatch(language, batchSize, includeAutoTagged);
-        coverage   = db.Traits.GetCoverageSummary(scanSnapshot.State == ScanState.ScanningInProgress, language);
+        candidates = db.Traits.GetUntaggedBatch(
+            language,
+            batchSize,
+            includeAutoTagged,
+            pathFilter,
+            onlyUtilities,
+            workspace.WorkspaceRoot);
+        coverage = db.Traits.GetCoverageSummary(scanSnapshot.State == ScanState.ScanningInProgress, language);
 
         // ── 4. Output / Return ──
         return new UntaggedBatchResponse(

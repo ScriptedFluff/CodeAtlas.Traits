@@ -139,6 +139,44 @@ public sealed class TraitsAppConfig
         return false;
     }
 
+    /// <summary>
+    /// Evaluates whether <paramref name="relativeFilePath"/> or <paramref name="className"/> matches an optional
+    /// glob or substring filter (e.g. <c>"**/Extensions/**"</c>, <c>"*Utilities*"</c>, or <c>"Extensions"</c>).
+    /// </summary>
+    public static bool MatchesPathFilter(string? relativeFilePath, string? className, string? rawPathFilter)
+    {
+        // ── 1. Declarations ──
+        string filter;
+        string normPath;
+        string normClass;
+        Regex? globRegex;
+
+        // ── 2. Preconditions & Guard Clauses ──
+        if (string.IsNullOrWhiteSpace(rawPathFilter))
+        {
+            return true;
+        }
+
+        // ── 3. Intent-First Narrative ──
+        filter    = rawPathFilter.Trim().Replace('\\', '/');
+        normPath  = (relativeFilePath ?? string.Empty).Trim().Replace('\\', '/').TrimStart('/');
+        normClass = (className ?? string.Empty).Trim();
+
+        if (filter.Contains('*') || filter.Contains('?'))
+        {
+            globRegex = CompileGlobRegex(filter);
+            if (globRegex is not null)
+            {
+                return globRegex.IsMatch(normPath) ||
+                       (!filter.Contains('/') && !string.IsNullOrEmpty(normClass) && globRegex.IsMatch(normClass));
+            }
+        }
+
+        // Plain substring matching on path or class name when no glob wildcards were used
+        return normPath.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+               (!filter.Contains('/') && normClass.Contains(filter, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static void NormaliseAndCompilePatterns(TraitsAppConfig config)
     {
         // ── 1. Intent-First Narrative ──

@@ -232,22 +232,30 @@ public sealed class TraitQueries(SqliteConnection connection, string? aiJsonlPat
     /// <summary>
     /// Returns a batch of untagged non-trivial symbols (or also baseline <c>'auto-cpu'</c> tagged symbols when
     /// <paramref name="includeAutoTagged"/> is <c>true</c>) ready for detailed AI analysis by Gemini, Copilot, or Claude.
+    /// Prioritises "High-Value Utility Islands" (<c>*Extensions*</c>, <c>*Utilities*</c>, <c>*Helpers*</c>, <c>*Common*</c>,
+    /// and non-test <c>static</c> methods) first, ordered by cognitive statement weight.
     /// </summary>
     public IReadOnlyList<UntaggedSymbolCandidate> GetUntaggedBatch(
         string? language = null,
         int batchSize = 25,
-        bool includeAutoTagged = false)
+        bool includeAutoTagged = false,
+        string? pathFilter = null,
+        bool onlyUtilities = false,
+        string? workspaceRoot = null)
     {
         // ── 1. Declarations ──
         string? normalisedLanguage;
         int effectiveBatchSize;
-        List<UntaggedSymbolCandidate> rawCandidates;
+        TraitsAppConfig config;
+        List<(UntaggedSymbolCandidate Candidate, int UtilityTier, bool HasExecBody, int StatementCount)> scoredCandidates;
+        List<UntaggedSymbolCandidate> topCandidates;
         List<UntaggedSymbolCandidate> enrichedCandidates;
 
         // ── 2. Preconditions & Guard Clauses ──
         normalisedLanguage = LanguageNormalizer.Normalise(language);
         effectiveBatchSize = Math.Clamp(batchSize, 1, 100);
-        rawCandidates      = [];
+        config             = TraitsAppConfig.Load(workspaceRoot);
+        scoredCandidates   = [];
         enrichedCandidates = [];
 
         // ── 3. Intent-First Narrative ──
@@ -256,43 +264,99 @@ public sealed class TraitQueries(SqliteConnection connection, string? aiJsonlPat
             cmd.CommandText = """
                 SELECT s.body_hash, s.symbol_name, s.symbol_type, s.class_name, s.language,
                        s.file_path, s.start_line, s.end_line, s.signature, s.doc_comment,
-                       s.extracted_content, e.tag_source, e.summary
+                       s.extracted_content, e.tag_source, e.summary,
+                       s.has_executable_body, s.statement_count, e.is_utility
                 FROM symbol_snapshots s
                 LEFT JOIN trait_entries e ON e.body_hash = s.body_hash
                 WHERE s.is_trivial = 0
                   AND (e.body_hash IS NULL OR (@includeAuto = 1 AND e.tag_source = 'auto-cpu'))
                   AND (@lang IS NULL OR s.language = @lang COLLATE NOCASE)
-                GROUP BY s.body_hash
-                ORDER BY CASE WHEN e.body_hash IS NULL THEN 0 ELSE 1 END ASC, s.file_path, s.start_line
-                LIMIT @limit;
+                GROUP BY s.body_hash;
                 """;
 
             cmd.Parameters.AddWithValue("@includeAuto", includeAutoTagged ? 1 : 0);
             cmd.Parameters.AddWithValue("@lang", (object?)normalisedLanguage ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@limit", effectiveBatchSize);
 
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
-                rawCandidates.Add(new UntaggedSymbolCandidate(
-                    BodyHash:         reader.GetString(0),
-                    SymbolName:       reader.GetString(1),
-                    SymbolType:       reader.GetString(2),
-                    ClassName:        reader.IsDBNull(3) ? null : reader.GetString(3),
-                    Language:         reader.GetString(4),
-                    FilePath:         reader.GetString(5),
-                    StartLine:        reader.GetInt32(6),
-                    EndLine:          reader.GetInt32(7),
-                    Signature:        reader.IsDBNull(8) ? null : reader.GetString(8),
-                    DocComment:       reader.IsDBNull(9) ? null : reader.GetString(9),
-                    ContentToAnalyse: reader.IsDBNull(10) ? string.Empty : reader.GetString(10),
-                    CurrentTagSource: reader.IsDBNull(11) ? null : reader.GetString(11),
+                var bodyHash    = reader.GetString(0);
+                var symbolName  = reader.GetString(1);
+                var symbolType  = reader.GetString(2);
+                var className   = reader.IsDBNull(3) ? null : reader.GetString(3);
+                var symLang     = reader.GetString(4);
+                var filePath    = reader.GetString(5);
+                var startLine   = reader.GetInt32(6);
+                var endLine     = reader.GetInt32(7);
+                var signature   = reader.IsDBNull(8) ? null : reader.GetString(8);
+                var docComment  = reader.IsDBNull(9) ? null : reader.GetString(9);
+                var content     = reader.IsDBNull(10) ? string.Empty : reader.GetString(10);
+                var tagSource   = reader.IsDBNull(11) ? null : reader.GetString(11);
+                var summary     = reader.IsDBNull(12) ? null : reader.GetString(12);
+                var hasExecBody = reader.IsDBNull(13) || reader.GetInt32(13) == 1;
+                var stmtCount   = reader.IsDBNull(14) ? 1 : reader.GetInt32(14);
+
+                if (config.IsPathIgnored(filePath) ||
+                    !TraitsAppConfig.MatchesPathFilter(filePath, className, pathFilter))
+                {
+                    continue;
+                }
+
+                var isUtility = AutoTraitTagger.IsHighValueUtilityCandidate(
+                    filePath,
+                    className,
+                    symbolName,
+                    symbolType,
+                    signature,
+                    content,
+                    hasExecBody);
+
+                if (onlyUtilities && !isUtility)
+                {
+                    continue;
+                }
+
+                var isDedicatedIsland = isUtility && AutoTraitTagger.IsDedicatedUtilityIsland(
+                    filePath,
+                    className,
+                    symbolName,
+                    signature,
+                    content);
+                var utilityTier = isDedicatedIsland ? 0 : (isUtility ? 1 : 2);
+
+                var cand = new UntaggedSymbolCandidate(
+                    BodyHash:         bodyHash,
+                    SymbolName:       symbolName,
+                    SymbolType:       symbolType,
+                    ClassName:        className,
+                    Language:         symLang,
+                    FilePath:         filePath,
+                    StartLine:        startLine,
+                    EndLine:          endLine,
+                    Signature:        signature,
+                    DocComment:       docComment,
+                    ContentToAnalyse: content,
+                    CurrentTagSource: tagSource,
                     CurrentTags:      null,
-                    CurrentSummary:   reader.IsDBNull(12) ? null : reader.GetString(12)));
+                    CurrentSummary:   summary,
+                    IsUtility:        isUtility);
+
+                scoredCandidates.Add((cand, utilityTier, hasExecBody, stmtCount));
             }
         }
 
-        foreach (var cand in rawCandidates)
+        topCandidates = scoredCandidates
+            .OrderBy(x => x.Candidate.CurrentTagSource is null ? 0 : 1)
+            .ThenBy(x => x.UtilityTier)
+            .ThenBy(x => x.HasExecBody ? 0 : 1)
+            .ThenByDescending(x => x.StatementCount)
+            .ThenBy(x => x.Candidate.FilePath, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.Candidate.StartLine)
+            .Take(effectiveBatchSize)
+            .Select(x => x.Candidate)
+            .ToList();
+
+        foreach (var cand in topCandidates)
         {
             if (cand.CurrentTagSource is not null)
             {
@@ -320,6 +384,7 @@ public sealed class TraitQueries(SqliteConnection connection, string? aiJsonlPat
         string? currentTagSource;
         string? currentSummary;
         IReadOnlyList<string>? currentTags;
+        bool isUtility;
 
         // ── 2. Preconditions & Guard Clauses ──
         if (string.IsNullOrWhiteSpace(rawTargetReference))
@@ -336,6 +401,7 @@ public sealed class TraitQueries(SqliteConnection connection, string? aiJsonlPat
 
         (currentTagSource, currentSummary) = GetTraitEntryMetaForBodyHash(snapshot.BodyHash);
         currentTags = currentTagSource is not null ? GetTagsForBodyHash(snapshot.BodyHash) : null;
+        isUtility   = AutoTraitTagger.InferIsUtility(snapshot);
 
         // ── 4. Output / Return ──
         return new UntaggedSymbolCandidate(
@@ -352,7 +418,8 @@ public sealed class TraitQueries(SqliteConnection connection, string? aiJsonlPat
             ContentToAnalyse: snapshot.ExtractedContent ?? string.Empty,
             CurrentTagSource: currentTagSource,
             CurrentTags:      currentTags,
-            CurrentSummary:   currentSummary);
+            CurrentSummary:   currentSummary,
+            IsUtility:        isUtility);
     }
 
     /// <summary>

@@ -99,26 +99,158 @@ public static class AutoTraitTagger
         };
     }
 
-    private static bool InferIsUtility(SymbolSnapshot snapshot)
+    public static bool InferIsUtility(SymbolSnapshot snapshot)
+    {
+        return IsHighValueUtilityCandidate(
+            snapshot.FilePath,
+            snapshot.ClassName,
+            snapshot.SymbolName,
+            snapshot.SymbolType,
+            snapshot.Signature,
+            snapshot.ExtractedContent,
+            snapshot.HasExecutableBody);
+    }
+
+    /// <summary>
+    /// Determines whether a symbol belongs to a high-value utility island (e.g. <c>*Extensions*</c>, <c>*Utilities*</c>,
+    /// <c>*Helpers*</c>, <c>*Common*</c>, <c>*Shared*</c>, or non-test <c>static</c> helper methods) while excluding
+    /// unit test fixtures (<c>*Tests*</c>, <c>[Fact]</c>, <c>[Theory]</c>, <c>[Test]</c>).
+    /// </summary>
+    public static bool IsHighValueUtilityCandidate(
+        string? filePath,
+        string? className,
+        string? symbolName,
+        string? symbolType,
+        string? signature,
+        string? extractedContent,
+        bool hasExecutableBody = true)
     {
         // ── 1. Declarations ──
-        string content;
-        string className;
+        string normPath;
+        string normClass;
+        string normSymbol;
+        string normSig;
+        string normContent;
 
-        // ── 2. Intent-First Narrative ──
-        content   = snapshot.ExtractedContent ?? string.Empty;
-        className = snapshot.ClassName ?? string.Empty;
+        // ── 2. Preconditions & Guard Clauses ──
+        normPath    = (filePath ?? string.Empty).Replace('\\', '/');
+        normClass   = className ?? string.Empty;
+        normSymbol  = symbolName ?? string.Empty;
+        normSig     = signature ?? string.Empty;
+        normContent = extractedContent ?? string.Empty;
 
-        if (content.Contains("static ", StringComparison.Ordinal) ||
-            className.EndsWith("Extensions", StringComparison.OrdinalIgnoreCase) ||
-            className.EndsWith("Helper", StringComparison.OrdinalIgnoreCase) ||
-            className.EndsWith("Utility", StringComparison.OrdinalIgnoreCase) ||
-            className.EndsWith("Utils", StringComparison.OrdinalIgnoreCase))
+        if (!hasExecutableBody)
+        {
+            return false;
+        }
+
+        // Exclude unit test fixtures and test methods so static test setup helpers do not pollute production utilities.
+        if (IsTestSymbolOrFile(normPath, normClass, normContent))
+        {
+            return false;
+        }
+
+        // ── 3. Intent-First Narrative ──
+        if (MatchesUtilityNamingConventions(normPath, normClass, normSymbol) ||
+            IsExtensionMethod(normContent, normSig))
         {
             return true;
         }
 
-        // ── 3. Output / Return ──
+        // Exclude Azure Function entry points and MVC Controller actions from being auto-classified as reusable utilities
+        if (normClass.EndsWith("Controller", StringComparison.OrdinalIgnoreCase) ||
+            normPath.Contains("/Controllers/", StringComparison.OrdinalIgnoreCase) ||
+            normPath.Contains("/Functions/", StringComparison.OrdinalIgnoreCase) ||
+            normContent.Contains("[FunctionName(", StringComparison.Ordinal) ||
+            normContent.Contains("[Function(", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if ((string.Equals(symbolType, "Method", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(symbolType, "Function", StringComparison.OrdinalIgnoreCase)) &&
+            (normSig.Contains("static ", StringComparison.Ordinal) ||
+             normContent.Contains("static ", StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        // ── 4. Output / Return ──
+        return false;
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when the symbol resides inside a dedicated utility/extension/helper class or directory
+    /// (Tier 0 "High-Value Utility Island"), or is an extension method (<c>this T</c>).
+    /// </summary>
+    public static bool IsDedicatedUtilityIsland(
+        string? filePath,
+        string? className,
+        string? symbolName,
+        string? signature,
+        string? extractedContent)
+    {
+        var normPath    = (filePath ?? string.Empty).Replace('\\', '/');
+        var normClass   = className ?? string.Empty;
+        var normSymbol  = symbolName ?? string.Empty;
+        var normSig     = signature ?? string.Empty;
+        var normContent = extractedContent ?? string.Empty;
+
+        if (IsTestSymbolOrFile(normPath, normClass, normContent))
+        {
+            return false;
+        }
+
+        return MatchesUtilityNamingConventions(normPath, normClass, normSymbol) ||
+               IsExtensionMethod(normContent, normSig);
+    }
+
+    private static bool IsTestSymbolOrFile(string normPath, string normClass, string normContent)
+    {
+        if (normPath.Contains(".Tests/", StringComparison.OrdinalIgnoreCase) ||
+            normPath.Contains("/Tests/", StringComparison.OrdinalIgnoreCase) ||
+            normPath.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase) ||
+            normPath.EndsWith("Test.cs", StringComparison.OrdinalIgnoreCase) ||
+            normPath.EndsWith(".spec.ts", StringComparison.OrdinalIgnoreCase) ||
+            normPath.EndsWith(".test.ts", StringComparison.OrdinalIgnoreCase) ||
+            normClass.EndsWith("Tests", StringComparison.OrdinalIgnoreCase) ||
+            normClass.EndsWith("Test", StringComparison.OrdinalIgnoreCase) ||
+            normContent.Contains("[Fact]", StringComparison.Ordinal) ||
+            normContent.Contains("[Theory]", StringComparison.Ordinal) ||
+            normContent.Contains("[Test]", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool MatchesUtilityNamingConventions(string normPath, string normClass, string normSymbol)
+    {
+        string[] utilityIndicators =
+        [
+            "Extension", "Helper", "Utility", "Utilities", "Utils",
+            "Formatter", "Parser", "Validator", "Converter", "Guard"
+        ];
+
+        foreach (var indicator in utilityIndicators)
+        {
+            if (normClass.Contains(indicator, StringComparison.OrdinalIgnoreCase) ||
+                normSymbol.EndsWith(indicator, StringComparison.OrdinalIgnoreCase) ||
+                normPath.Contains($"/{indicator}", StringComparison.OrdinalIgnoreCase) ||
+                normPath.EndsWith($"{indicator}.cs", StringComparison.OrdinalIgnoreCase) ||
+                normPath.EndsWith($"{indicator}s.cs", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        if (normPath.Contains("/Shared/Utils/", StringComparison.OrdinalIgnoreCase) ||
+            normPath.Contains("/Common/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
         return false;
     }
 

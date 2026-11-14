@@ -38,7 +38,8 @@ public sealed record UntaggedSymbolCandidate(
     string ContentToAnalyse,
     string? CurrentTagSource = null,
     IReadOnlyList<string>? CurrentTags = null,
-    string? CurrentSummary = null);
+    string? CurrentSummary = null,
+    bool IsUtility = false);
 
 /// <summary>
 /// Represents a group of symbols that share an identical <see cref="BodyHash"/>
